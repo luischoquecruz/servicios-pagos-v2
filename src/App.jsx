@@ -709,7 +709,11 @@ function VistaPublica({ cfg, personas, tarifas, onLoginClick, toggleDarkMode, li
           return false;
         }).reduce((s, pg) => s + Number(pg.total || 0), 0);
         const saldo = Math.round((debe - pagado) * 10) / 10;
-        if (saldo > 0) detalles.push({ key: k, periodo: mesLabel + " " + y, debe, pagado, saldo, servicios: serviciosDebe });
+        if (saldo <= 0) return;
+        const fc = v.factores?.[pid];
+        const factorHab = fc?.habitaciones ?? Number(personaSel.habitaciones) ?? 1;
+        const factorPers = fc?.personas ?? Number(personaSel.personas) ?? 1;
+        detalles.push({ key: k, periodo: mesLabel + " " + y, debe, pagado, saldo, servicios: serviciosDebe, factorHab, factorPers });
       });
     } catch { return { total: 0, detalles: [] }; }
     const total = detalles.reduce((s, d) => s + d.saldo, 0);
@@ -740,48 +744,58 @@ function VistaPublica({ cfg, personas, tarifas, onLoginClick, toggleDarkMode, li
     <h2>Deuda acumulada de períodos anteriores</h2>
     <div class="sub">${personaSel?.nombre || ""} ${personaSel?.inmueble ? "— " + personaSel.inmueble : ""}</div>
     <h3 style="font-size:13px;margin:16px 0 8px;color:#1e293b">📋 Costo de servicios adeudados por período</h3>
-    <table>
-    <thead><tr>
-      <th>Período</th>
-      ${servicios.map(s => `<th>${s.icon}</th>`).join("")}
-    </tr></thead>
-    <tbody>${dd.map(d => {
-      const tarifasPeriodo = tarifas[d.key] || {};
-      return `<tr>
-        <td>${d.periodo}</td>
-        ${servicios.map(s => {
-          if (!d.servicios?.[s.id]) return '<td>—</td>';
-          const tarifa = tarifasPeriodo[s.id];
-          return `<td>${tarifa ? "Bs.- " + fmtMoney(tarifa) : "—"}</td>`;
-        }).join("")}
-      </tr>`;
-    }).join("")}</tbody></table>
+     <table>
+     <thead><tr>
+       <th>Período</th>
+       <th>Hab.</th>
+       <th>Pers.</th>
+       ${servicios.map(s => `<th>${s.icon}</th>`).join("")}
+     </tr></thead>
+     <tbody>${dd.map(d => {
+       const tarifasPeriodo = tarifas[d.key] || {};
+       return `<tr>
+         <td>${d.periodo}</td>
+         <td style="text-align:center">${d.factorHab || "—"}</td>
+         <td style="text-align:center">${d.factorPers || "—"}</td>
+         ${servicios.map(s => {
+           if (!d.servicios?.[s.id]) return '<td>—</td>';
+           const tarifa = tarifasPeriodo[s.id];
+           return `<td>${tarifa ? "Bs.- " + fmtMoney(tarifa) : "—"}</td>`;
+         }).join("")}
+       </tr>`;
+     }).join("")}</tbody></table>
     <h3 style="font-size:13px;margin:16px 0 8px;color:#1e293b">💰 Detalle de deuda por período</h3>
-    <table>
-    <thead><tr>
-      <th>Período</th>
-      ${servicios.map(s => `<th>${s.icon}</th>`).join("")}
-      <th>Debe</th>
-      <th>Pagado</th>
-      <th>Saldo</th>
-    </tr></thead>
-    <tbody>${dd.map(d => {
-      const tarifasPeriodo = tarifas[d.key] || {};
-      return `<tr>
-        <td>${d.periodo}</td>
-        ${servicios.map(s => {
-          const monto = d.servicios?.[s.id] || 0;
-          const tarifa = tarifasPeriodo[s.id];
-          const tarifaStr = tarifa ? `<div class="tarifa">Bs.- ${fmtMoney(tarifa)}</div>` : "";
-          return `<td>${monto > 0 ? '<div>Bs.- ' + fmtMoney(monto) + '</div>' + tarifaStr : "—"}</td>`;
-        }).join("")}
-        <td class="total">Bs.- ${fmtMoney(d.debe)}</td>
-        <td class="pagado">${d.pagado > 0 ? "Bs.- " + fmtMoney(d.pagado) : "—"}</td>
-        <td class="saldo">Bs.- ${fmtMoney(d.saldo)}</td>
-      </tr>`;
-    }).join("")}</tbody>
-    <tfoot><tr class="tfoot">
-      <td>Total</td>
+     <table>
+     <thead><tr>
+       <th>Período</th>
+       <th>Hab.</th>
+       <th>Pers.</th>
+       ${servicios.map(s => `<th>${s.icon}</th>`).join("")}
+       <th>Debe</th>
+       <th>Pagado</th>
+       <th>Saldo</th>
+     </tr></thead>
+     <tbody>${dd.map(d => {
+       const tarifasPeriodo = tarifas[d.key] || {};
+       return `<tr>
+         <td>${d.periodo}</td>
+         <td style="text-align:center">${d.factorHab || "—"}</td>
+         <td style="text-align:center">${d.factorPers || "—"}</td>
+         ${servicios.map(s => {
+           const monto = d.servicios?.[s.id] || 0;
+           const tarifa = tarifasPeriodo[s.id];
+           const tarifaStr = tarifa ? `<div class="tarifa">Bs.- ${fmtMoney(tarifa)}</div>` : "";
+           return `<td>${monto > 0 ? '<div>Bs.- ' + fmtMoney(monto) + '</div>' + tarifaStr : "—"}</td>`;
+         }).join("")}
+         <td class="total">Bs.- ${fmtMoney(d.debe)}</td>
+         <td class="pagado">${d.pagado > 0 ? "Bs.- " + fmtMoney(d.pagado) : "—"}</td>
+         <td class="saldo">Bs.- ${fmtMoney(d.saldo)}</td>
+       </tr>`;
+     }).join("")}</tbody>
+     <tfoot><tr class="tfoot">
+       <td>Total</td>
+       <td></td>
+       <td></td>
       ${servicios.map(s => {
         const totalSrv = dd.reduce((sum, d) => sum + (d.servicios?.[s.id] || 0), 0);
         return `<td>${totalSrv > 0 ? "Bs.- " + fmtMoney(totalSrv) : "—"}</td>`;
