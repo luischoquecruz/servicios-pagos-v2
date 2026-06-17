@@ -751,19 +751,23 @@ function VistaPublica({ cfg, personas, tarifas, onLoginClick, toggleDarkMode, li
        <th>Pers.</th>
        ${servicios.map(s => `<th>${s.icon}</th>`).join("")}
      </tr></thead>
-     <tbody>${dd.map(d => {
-       const tarifasPeriodo = tarifas[d.key] || {};
-       return `<tr>
-         <td>${d.periodo}</td>
-         <td style="text-align:center">${d.factorHab || "—"}</td>
-         <td style="text-align:center">${d.factorPers || "—"}</td>
-         ${servicios.map(s => {
-           if (!d.servicios?.[s.id]) return '<td>—</td>';
-           const tarifa = tarifasPeriodo[s.id];
-           return `<td>${tarifa ? "Bs.- " + fmtMoney(tarifa) : "—"}</td>`;
-         }).join("")}
-       </tr>`;
-     }).join("")}</tbody></table>
+      <tbody>${dd.map(d => {
+        const tarifasPeriodo = tarifas[d.key] || {};
+        const liq = liquidaciones[d.key];
+        const fcts = liq?.factores || {};
+        const totalHab = Object.values(fcts).reduce((s, f) => s + Number(f.habitaciones || 0), 0);
+        const totalPers = Object.values(fcts).reduce((s, f) => s + Number(f.personas || 0), 0);
+        return `<tr>
+          <td>${d.periodo}</td>
+          <td style="text-align:center">${totalHab || "—"}</td>
+          <td style="text-align:center">${totalPers || "—"}</td>
+          ${servicios.map(s => {
+            if (!d.servicios?.[s.id]) return '<td>—</td>';
+            const tarifa = tarifasPeriodo[s.id];
+            return `<td>${tarifa ? "Bs.- " + fmtMoney(tarifa) : "—"}</td>`;
+          }).join("")}
+        </tr>`;
+      }).join("")}</tbody></table>
     <h3 style="font-size:13px;margin:16px 0 8px;color:#1e293b">💰 Detalle de deuda por período</h3>
      <table>
      <thead><tr>
@@ -775,18 +779,15 @@ function VistaPublica({ cfg, personas, tarifas, onLoginClick, toggleDarkMode, li
        <th>Pagado</th>
        <th>Saldo</th>
      </tr></thead>
-     <tbody>${dd.map(d => {
-       const tarifasPeriodo = tarifas[d.key] || {};
-       return `<tr>
-         <td>${d.periodo}</td>
-         <td style="text-align:center">${d.factorHab || "—"}</td>
-         <td style="text-align:center">${d.factorPers || "—"}</td>
-         ${servicios.map(s => {
-           const monto = d.servicios?.[s.id] || 0;
-           const tarifa = tarifasPeriodo[s.id];
-           const tarifaStr = tarifa ? `<div class="tarifa">Bs.- ${fmtMoney(tarifa)}</div>` : "";
-           return `<td>${monto > 0 ? '<div>Bs.- ' + fmtMoney(monto) + '</div>' + tarifaStr : "—"}</td>`;
-         }).join("")}
+      <tbody>${dd.map(d => {
+        return `<tr>
+          <td>${d.periodo}</td>
+          <td style="text-align:center">${d.factorHab || "—"}</td>
+          <td style="text-align:center">${d.factorPers || "—"}</td>
+          ${servicios.map(s => {
+            const monto = d.servicios?.[s.id] || 0;
+            return `<td>${monto > 0 ? "Bs.- " + fmtMoney(monto) : "—"}</td>`;
+          }).join("")}
          <td class="total">Bs.- ${fmtMoney(d.debe)}</td>
          <td class="pagado">${d.pagado > 0 ? "Bs.- " + fmtMoney(d.pagado) : "—"}</td>
          <td class="saldo">Bs.- ${fmtMoney(d.saldo)}</td>
