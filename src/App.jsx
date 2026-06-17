@@ -728,11 +728,11 @@ function VistaPublica({ cfg, personas, tarifas, onLoginClick, toggleDarkMode, li
       body{font-family:Arial,sans-serif;margin:20px;font-size:12px;color:#1e293b}
       h2{font-size:16px;margin:0 0 4px}
       .sub{font-size:11px;color:#64748b;margin-bottom:14px}
-      table{width:100%;border-collapse:collapse;font-size:11px}
-      th{background:#065f46;color:#fff;padding:6px 8px;text-align:center;font-size:10px}
-      th:first-child{text-align:left}
-      td{padding:5px 8px;text-align:center;border-bottom:1px solid #e2e8f0}
-      td:first-child{text-align:left;font-weight:700}
+       table{width:auto;margin:0 auto;border-collapse:collapse;font-size:11px}
+       th{background:#065f46;color:#fff;padding:4px 6px;text-align:center;font-size:9px}
+       th:first-child{text-align:left}
+       td{padding:3px 6px;text-align:center;border-bottom:1px solid #e2e8f0}
+       td:first-child{text-align:left;font-weight:700}
       .tfoot td{font-weight:700;font-size:12px;border-top:2px solid #1e293b}
       .srv-row{background:#f8fafc}
       .total{color:#059669}
