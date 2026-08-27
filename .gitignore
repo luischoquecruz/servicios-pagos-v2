@@ -1,0 +1,26 @@
+# backend
+backend/target/
+backend/data/
+backend/*.log
+
+# frontend
+frontend/node_modules/
+frontend/dist/
+frontend/nppBackup/
+
+# vercel
+.vercel/
+frontend/.vercel/
+
+# env (las variables reales se configuran en Vercel/env local; aqui solo plantillas)
+.env
+.env.*
+!*.example
+frontend/.env
+frontend/.env.production
+
+# misc
+.DS_Store
+*.iml
+.idea/
+.vscode/

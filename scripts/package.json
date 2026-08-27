@@ -1,0 +1,8 @@
+{
+  "name": "alquileres-scripts",
+  "private": true,
+  "description": "Pruebas off-line de la logica de scripts/Code.gs (port del motor de cobros)",
+  "scripts": {
+    "test": "node test-logica.js"
+  }
+}
