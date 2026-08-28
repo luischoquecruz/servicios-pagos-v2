@@ -194,7 +194,7 @@ export function Facturas() {
 
       {aviso && <Aviso mensaje={aviso.mensaje} tipo={aviso.tipo} onCerrar={() => setAviso(null)} />}
 
-      <div className="grid3">
+      <div className="grid-facturas">
         {/* Formulario */}
         <section className="panel">
           <h3>{editarId ? 'Editar factura' : 'Registrar factura'}</h3>
@@ -271,39 +271,41 @@ export function Facturas() {
                   </button>
                   {abierto && (
                     <div className="mes-contenido">
-                      <table className="tabla">
-                        <thead>
-                          <tr>
-                            <th>Fecha</th>
-                            <th>Servicio</th>
-                            <th className="num">Cantidad</th>
-                            <th className="num">Monto</th>
-                            <th>Observación</th>
-                            <th className="acciones">—</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {mes.facturas.map((p) => (
-                            <tr key={p.id}>
-                              <td>{fmtFecha(p.fechaPago)}</td>
-                              <td>{nombreServicio(p.servicioId, mapSvc)}</td>
-                              <td className="num">
-                                {p.cantidad != null ? `${p.cantidad} ${p.unidadMedida ?? ''}`.trim() : '—'}
-                              </td>
-                              <td className="num"><strong>{fmtBs(p.montoBs)}</strong></td>
-                              <td className="muted">{p.observacion || '—'}</td>
-                              <td className="acciones">
-                                <Boton variante="secundario" className="btn-mini" onClick={() => iniciarEdicion(p)}>
-                                  Editar
-                                </Boton>
-                                <Boton variante="peligro" className="btn-mini" onClick={() => eliminar(p)}>
-                                  Eliminar
-                                </Boton>
-                              </td>
+                      <div className="tabla-wrap">
+                        <table className="tabla">
+                          <thead>
+                            <tr>
+                              <th className="sticky-col">Fecha</th>
+                              <th>Servicio</th>
+                              <th className="num">Cantidad</th>
+                              <th className="num">Monto</th>
+                              <th>Observación</th>
+                              <th className="acciones">—</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                          </thead>
+                          <tbody>
+                            {mes.facturas.map((p) => (
+                              <tr key={p.id}>
+                                <td className="sticky-col">{fmtFecha(p.fechaPago)}</td>
+                                <td>{nombreServicio(p.servicioId, mapSvc)}</td>
+                                <td className="num">
+                                  {p.cantidad != null ? `${p.cantidad} ${p.unidadMedida ?? ''}`.trim() : '—'}
+                                </td>
+                                <td className="num"><strong>{fmtBs(p.montoBs)}</strong></td>
+                                <td className="muted">{p.observacion || '—'}</td>
+                                <td className="acciones">
+                                  <Boton variante="secundario" className="btn-mini" onClick={() => iniciarEdicion(p)}>
+                                    Editar
+                                  </Boton>
+                                  <Boton variante="peligro" className="btn-mini" onClick={() => eliminar(p)}>
+                                    Eliminar
+                                  </Boton>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
                   )}
                 </div>

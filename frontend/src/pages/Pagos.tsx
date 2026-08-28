@@ -14,6 +14,32 @@ interface AvisoUi {
   tipo: 'ok' | 'error';
 }
 
+/** Celda del historial: cobrado + pagado del mes, con saldo y estado. */
+function CeldaHist({ cobrado, pagado }: { cobrado: number; pagado: number }) {
+  const saldo = cobrado - pagado;
+  if (!cobrado && !pagado) {
+    return <span className="muted">—</span>;
+  }
+  return (
+    <div className="hist-celda">
+      {cobrado ? (
+        <strong title={`Cobrado ${fmtBs(cobrado)}`} className={saldo > 0 ? 'saldo-neg' : ''}>
+          {fmtBs(cobrado)}
+        </strong>
+      ) : (
+        <span className="muted">sin cobro</span>
+      )}
+      {pagado ? (
+        <span className="pago-hecho" title={`Pagado ${fmtBs(pagado)}`}>
+          ✓ {fmtBs(pagado)}
+        </span>
+      ) : (
+        <span className="hist-pendiente">Pendiente</span>
+      )}
+    </div>
+  );
+}
+
 export function Pagos() {
   const { snap, mapInq, mapSvc, recargar } = useSnapshot();
   const [periodo, setPeriodo] = useState(mesActual());
@@ -492,50 +518,52 @@ export function Pagos() {
                   {historial.conceptos.map((c) => (
                     <th key={c.clave} className="centro">{c.nombre}</th>
                   ))}
+                  <th className="centro">Servicios</th>
+                  <th className="centro">Total mes</th>
                 </tr>
               </thead>
               <tbody>
-                {historial.filas.map((f) => (
-                  <tr key={f.periodo} className={f.celdas.size > 0 ? 'fila-pagada' : ''}>
-                    <td className="sticky-col">{nombreMes(f.periodo)}</td>
-                    {historial.conceptos.map((c) => {
-                      const cel = f.celdas.get(c.clave);
-                      const cobrado = cel?.cobrado ?? 0;
-                      const pagado = cel?.pagado ?? 0;
-                      if (!cobrado && !pagado) {
+                {historial.filas.map((f) => {
+                  let sumaSvcCobro = 0;
+                  let sumaSvcPago = 0;
+                  let sumaCobro = 0;
+                  let sumaPago = 0;
+                  for (const c of historial.conceptos) {
+                    const cel = f.celdas.get(c.clave);
+                    const cobrado = cel?.cobrado ?? 0;
+                    const pagado = cel?.pagado ?? 0;
+                    sumaCobro += cobrado;
+                    sumaPago += pagado;
+                    if (c.clave !== ALQUILER_ID && c.clave !== '__general__') {
+                      sumaSvcCobro += cobrado;
+                      sumaSvcPago += pagado;
+                    }
+                  }
+                  return (
+                    <tr key={f.periodo} className={f.celdas.size > 0 ? 'fila-pagada' : ''}>
+                      <td className="sticky-col">{nombreMes(f.periodo)}</td>
+                      {historial.conceptos.map((c) => {
+                        const cel = f.celdas.get(c.clave);
+                        const cobrado = cel?.cobrado ?? 0;
+                        const pagado = cel?.pagado ?? 0;
                         return (
                           <td key={c.clave} className="centro">
-                            <span className="muted">—</span>
+                            <CeldaHist cobrado={cobrado} pagado={pagado} />
                           </td>
                         );
-                      }
-                      const saldo = cobrado - pagado;
-                      return (
-                        <td key={c.clave} className="centro">
-                          <div className="hist-celda">
-                            {cobrado ? (
-                              <strong title={`Cobrado ${fmtBs(cobrado)}`} className={saldo > 0 ? 'saldo-neg' : ''}>
-                                {fmtBs(cobrado)}
-                              </strong>
-                            ) : (
-                              <span className="muted">sin cobro</span>
-                            )}
-                            {pagado ? (
-                              <span className="pago-hecho" title={`Pagado ${fmtBs(pagado)}`}>
-                                ✓ {fmtBs(pagado)}
-                              </span>
-                            ) : (
-                              <span className="hist-pendiente">Pendiente</span>
-                            )}
-                          </div>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
+                      })}
+                      <td className="centro">
+                        <CeldaHist cobrado={sumaSvcCobro} pagado={sumaSvcPago} />
+                      </td>
+                      <td className="centro">
+                        <CeldaHist cobrado={sumaCobro} pagado={sumaPago} />
+                      </td>
+                    </tr>
+                  );
+                })}
                 {historial.filas.length === 0 && (
                   <tr>
-                    <td colSpan={historial.conceptos.length + 1} className="muted" style={{ textAlign: 'center', padding: '16px' }}>
+                    <td colSpan={historial.conceptos.length + 3} className="muted" style={{ textAlign: 'center', padding: '16px' }}>
                       Sin cobros ni pagos registrados para este inquilino.
                     </td>
                   </tr>

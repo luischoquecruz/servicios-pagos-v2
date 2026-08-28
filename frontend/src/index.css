@@ -378,6 +378,11 @@ nav {
   color: var(--peligro);
 }
 
+.estado-favor {
+  background: color-mix(in srgb, #0284c7 12%, var(--panel));
+  color: #0369a1;
+}
+
 .tabla-wrap {
   overflow-x: auto;
 }
@@ -726,6 +731,13 @@ nav {
   align-items: start;
 }
 
+.grid-facturas {
+  display: grid;
+  grid-template-columns: 420px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
 .toolbar {
   display: flex;
   align-items: center;
@@ -843,7 +855,8 @@ nav {
   }
 
   .grid2,
-  .grid3 {
+  .grid3,
+  .grid-facturas {
     grid-template-columns: 1fr;
   }
 
@@ -1267,8 +1280,14 @@ nav {
   border-top: 1px solid var(--borde);
 }
 
+.mes-contenido .tabla-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 .mes-contenido .tabla {
   margin: 0;
+  min-width: 520px;
 }
 
 .mes-contenido .tabla th {
@@ -1497,6 +1516,11 @@ nav {
   .estado-deuda {
     background: #fee2e2 !important;
     color: #b91c1c !important;
+  }
+
+  .estado-favor {
+    background: #e0f2fe !important;
+    color: #0369a1 !important;
   }
 
   .saldo-neg {

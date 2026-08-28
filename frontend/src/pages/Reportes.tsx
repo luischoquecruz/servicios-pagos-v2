@@ -1,14 +1,11 @@
 import { Fragment, useMemo, useState } from 'react';
-import { getReporteMensual } from '../api';
 import { useSnapshot } from '../components/SnapshotContext';
-import { usePolling } from '../hooks/usePolling';
-import type { ReporteMensual } from '../types';
+import type { Snapshot, Servicio } from '../types';
 import { calcularDeudaPorConcepto, nombreMes } from '../deuda';
 import { descargarCSV, fmtBs, mesActual, ALQUILER_ID } from '../utils';
 import { Cargando } from '../components/ui/Cargando';
 import { Boton } from '../components/ui/Boton';
 import { Aviso } from '../components/ui/Aviso';
-import { POLL_MS } from '../modo';
 
 type Pestaña = 'mensual' | 'general';
 
@@ -46,6 +43,7 @@ export function Reportes() {
 }
 
 function ResumenCards({ cobrado, pagado, saldo }: { cobrado: number; pagado: number; saldo: number }) {
+  const aFavor = saldo < 0;
   return (
     <div className="cards">
       <div className="card card-info">
@@ -56,25 +54,177 @@ function ResumenCards({ cobrado, pagado, saldo }: { cobrado: number; pagado: num
         <span className="card-label">Total pagado</span>
         <span className="card-value">{fmtBs(pagado)}</span>
       </div>
-      <div className={`card ${saldo > 0 ? 'card-mal' : 'card-ok'}`}>
-        <span className="card-label">Saldo pendiente</span>
-        <span className="card-value">{fmtBs(saldo)}</span>
+      <div className={`card ${aFavor ? 'card-ok' : saldo > 0 ? 'card-mal' : 'card-info'}`}>
+        <span className="card-label">{aFavor ? 'Saldo a favor' : 'Saldo pendiente'}</span>
+        <span className="card-value">{fmtBs(Math.abs(saldo))}</span>
       </div>
     </div>
   );
 }
 
+interface FilaPorInquilino {
+  inquilinoId: string;
+  nombre: string;
+  cobrado: number;
+  pagado: number;
+  saldo: number;
+}
+
+interface FilaPorServicio {
+  servicioId: string | null;
+  nombre: string;
+  cantidadCobros: number;
+  cobrado: number;
+  pagado: number;
+  saldo: number;
+}
+
+interface FilaDetalleMensual {
+  id: string;
+  inquilinoId: string;
+  inquilinoNombre: string;
+  servicioId: string;
+  servicioNombre: string;
+  peso: number;
+  pesoTotal: number;
+  montoBase: number;
+  montoExtra: number;
+  montoTotal: number;
+  habitaciones: number;
+  personas: number;
+  extras: Record<string, number>;
+  pagado: number;
+  saldo: number;
+}
+
+interface MensualLocal {
+  porInquilino: FilaPorInquilino[];
+  porServicio: FilaPorServicio[];
+  detalle: FilaDetalleMensual[];
+  totalCobrado: number;
+  totalPagado: number;
+  saldo: number;
+}
+
+function nombreDeServicio(svcId: string, mapSvc: Map<string, Servicio>): string {
+  if (svcId === ALQUILER_ID) return 'Alquiler';
+  return mapSvc.get(svcId)?.nombre ?? svcId;
+}
+
+/**
+ * Reporte mensual calculado desde el snapshot con la misma asignación de pagos
+ * del historial (pago primero al mes indicado y el sobrante a la deuda más
+ * antigua). Así un pago general que cubre meses adeudados aparece pagado en el
+ * mes que corresponda y no como "saldo a favor" del mes en que se registró.
+ */
+function calcularMensual(snap: Snapshot, periodo: string, mapSvc: Map<string, Servicio>): MensualLocal {
+  const porInq: FilaPorInquilino[] = [];
+  const porSvc = new Map<string, FilaPorServicio>();
+  const detalle: FilaDetalleMensual[] = [];
+
+  for (const inq of snap.inquilinos) {
+    const d = calcularDeudaPorConcepto(inq.id, snap.cobros, snap.pagos);
+    const fila = d.mensual.find((m) => m.periodo === periodo);
+    if (!fila || (fila.cobrado <= 0.005 && fila.pagado <= 0.005)) continue;
+
+    porInq.push({
+      inquilinoId: inq.id,
+      nombre: inq.nombre,
+      cobrado: red2(fila.cobrado),
+      pagado: red2(fila.pagado),
+      saldo: red2(fila.saldo),
+    });
+
+    const celda = d.filas.find((f) => f.periodo === periodo);
+    const genPagado = celda?.celdas.get('__general__')?.pagado ?? 0;
+
+    // Saldo restante por concepto en este mes: base para repartir el pago general.
+    const saldoConc = new Map<string, number>();
+    let totalSaldo = 0;
+    for (const [k, c] of celda?.celdas ?? []) {
+      if (k === '__general__') continue;
+      const s = Math.max(0, c.cobrado - c.pagado);
+      saldoConc.set(k, s);
+      totalSaldo += s;
+    }
+
+    const cobrosMes = snap.cobros.filter((c) => c.inquilinoId === inq.id && c.periodo === periodo);
+    const cobradoConc = new Map<string, number>();
+    for (const c of cobrosMes) {
+      cobradoConc.set(c.servicioId, (cobradoConc.get(c.servicioId) ?? 0) + (c.montoTotal || 0));
+    }
+
+    for (const [svcId, tot] of cobradoConc) {
+      const etiq = celda?.celdas.get(svcId)?.pagado ?? 0;
+      const s = saldoConc.get(svcId) ?? 0;
+      const shareGen = genPagado > 0 && totalSaldo > 0 && s > 0 ? (genPagado * s) / totalSaldo : 0;
+      const pagadoConc = Math.min(tot, etiq + shareGen);
+
+      const rows = cobrosMes.filter((c) => c.servicioId === svcId);
+      const nombre = nombreDeServicio(svcId, mapSvc);
+      const prev = porSvc.get(svcId);
+      porSvc.set(svcId, {
+        servicioId: svcId,
+        nombre,
+        cantidadCobros: (prev?.cantidadCobros ?? 0) + rows.length,
+        cobrado: red2((prev?.cobrado ?? 0) + tot),
+        pagado: red2((prev?.pagado ?? 0) + pagadoConc),
+        saldo: red2((prev?.saldo ?? 0) + Math.max(0, tot - pagadoConc)),
+      });
+
+      for (const c of rows) {
+        const share = tot > 0 ? Math.min(1, (c.montoTotal || 0) / tot) : 0;
+        const pagLinea = Math.min(c.montoTotal || 0, pagadoConc * share);
+        detalle.push({
+          id: c.id,
+          inquilinoId: inq.id,
+          inquilinoNombre: inq.nombre,
+          servicioId: svcId,
+          servicioNombre: nombre,
+          peso: c.peso,
+          pesoTotal: c.pesoTotal,
+          montoBase: c.montoBase,
+          montoExtra: c.montoExtra,
+          montoTotal: c.montoTotal,
+          habitaciones: c.habitaciones,
+          personas: c.personas,
+          extras: c.extras ?? {},
+          pagado: red2(pagLinea),
+          saldo: red2((c.montoTotal || 0) - pagLinea),
+        });
+      }
+    }
+  }
+
+  porInq.sort((a, b) => b.saldo - a.saldo || a.nombre.localeCompare(b.nombre));
+  const porServicio = [...porSvc.values()].sort(
+    (a, b) => b.cobrado - a.cobrado || a.nombre.localeCompare(b.nombre),
+  );
+  detalle.sort((a, b) => a.inquilinoNombre.localeCompare(b.inquilinoNombre));
+
+  const totalCobrado = red2(porInq.reduce((s, t) => s + t.cobrado, 0));
+  const totalPagado = red2(porInq.reduce((s, t) => s + t.pagado, 0));
+  return {
+    porInquilino: porInq,
+    porServicio,
+    detalle,
+    totalCobrado,
+    totalPagado,
+    saldo: red2(totalCobrado - totalPagado),
+  };
+}
+
 function ReporteMensualPag({ periodo, onPeriodo }: { periodo: string; onPeriodo: (p: string) => void }) {
-  const { data, error, cargando } = usePolling<ReporteMensual>(
-    () => getReporteMensual(periodo),
-    POLL_MS,
-    !!periodo,
+  const { snap, mapSvc, error } = useSnapshot();
+
+  const r = useMemo<MensualLocal | null>(
+    () => (snap ? calcularMensual(snap, periodo, mapSvc) : null),
+    [snap, periodo, mapSvc],
   );
 
-  if (cargando && !data) return <Cargando />;
-  if (error && !data) return <Aviso mensaje={error} tipo="error" onCerrar={() => undefined} />;
-
-  const r = data!;
+  if (!snap && !error) return <Cargando />;
+  if (error && !snap) return <Aviso mensaje={error} tipo="error" onCerrar={() => undefined} />;
+  if (!r) return <Cargando />;
 
   const extraKeys = extraKeysDe(r.detalle);
 
@@ -82,13 +232,13 @@ function ReporteMensualPag({ periodo, onPeriodo }: { periodo: string; onPeriodo:
     const header = ['Inquilino', 'Servicio', 'Peso', 'Cuartos', 'Personas', ...extraKeys,
       'Base (Bs)', 'Extras (Bs)', 'Total (Bs)', 'Pagado (Bs)', 'Saldo (Bs)'];
     const rows = r.detalle.map((d) => [
-      d.inquilinoNombre, d.servicioNombre, String(d.peso), String(d.pesoTotal),
+      d.inquilinoNombre, d.servicioNombre, `${d.peso}/${d.pesoTotal}`,
       String(d.habitaciones), String(d.personas),
       ...extraKeys.map((k) => String(d.extras[k] ?? 0)),
       String(d.montoBase), String(d.montoExtra), String(d.montoTotal),
       String(d.pagado), String(d.saldo),
     ]);
-    descargarCSV(`reporte-${r.periodo}.csv`, [header, ...rows]);
+    descargarCSV(`reporte-${periodo}.csv`, [header, ...rows]);
   };
 
   return (
@@ -119,27 +269,48 @@ function ReporteMensualPag({ periodo, onPeriodo }: { periodo: string; onPeriodo:
                 <th className="sticky-col">Inquilino</th>
                 <th className="num">Cobrado</th>
                 <th className="num">Pagado</th>
-                <th className="num">Saldo</th>
+                <th className="num">Deuda</th>
+                <th className="centro">Estado</th>
               </tr>
             </thead>
             <tbody>
-              {r.porInquilino.map((t) => (
-                <tr key={t.inquilinoId}>
-                  <td className="sticky-col">{t.nombre}</td>
-                  <td className="num">{fmtBs(t.cobrado)}</td>
-                  <td className="num">{fmtBs(t.pagado)}</td>
-                  <td className={`num ${t.saldo > 0 ? 'saldo-neg' : ''}`}>{fmtBs(t.saldo)}</td>
-                </tr>
-              ))}
+              {r.porInquilino.map((t) => {
+                const deuda = Math.max(0, t.saldo);
+                const favor = Math.max(0, -t.saldo);
+                return (
+                  <tr key={t.inquilinoId}>
+                    <td className="sticky-col">{t.nombre}</td>
+                    <td className="num">{fmtBs(t.cobrado)}</td>
+                    <td className="num">{fmtBs(t.pagado)}</td>
+                    <td className="num">
+                      {deuda > 0 ? <span className="saldo-neg">{fmtBs(deuda)}</span> : <span className="muted">—</span>}
+                    </td>
+                    <td className="centro">
+                      {deuda > 0 ? (
+                        <span className="estado estado-deuda">Debe {fmtBs(deuda)}</span>
+                      ) : favor > 0 ? (
+                        <span className="estado estado-favor">A favor {fmtBs(favor)}</span>
+                      ) : (
+                        <span className="estado estado-al-dia">Al día</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
               {r.porInquilino.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="muted">
+                  <td colSpan={5} className="muted">
                     Sin datos para este periodo.
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
+          {r.porInquilino.some((t) => t.saldo < -0.005) && (
+            <p className="muted" style={{ marginTop: 8 }}>
+              A favor = pago recibido sin cobros pendientes en este mes (adelanto).
+            </p>
+          )}
         </section>
 
         <section className="panel">
