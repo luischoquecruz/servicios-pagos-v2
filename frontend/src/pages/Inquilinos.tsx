@@ -109,7 +109,7 @@ export function Inquilinos() {
         <table className="tabla">
           <thead>
             <tr>
-              <th>Nombre</th>
+              <th className="sticky-col">Nombre</th>
               <th>Celular</th>
               <th>Ingreso</th>
               <th>Salida</th>
@@ -135,7 +135,7 @@ export function Inquilinos() {
               ).length ?? 0;
               return (
                 <tr key={i.id} className={i.habilitado ? '' : 'fila-apagada'}>
-                  <td>
+                  <td className="sticky-col">
                     <span className="celda-nombre">{i.nombre}</span>
                   </td>
                   <td>{i.celular || '—'}</td>

@@ -552,21 +552,18 @@ function calcularPara(periodo, servicioFiltro, datos) {
  * Cobros de alquiler mensual por inquilino. Solo para inquilinos con
  * cobraAlquiler=true, habitando la casa en el periodo y con un monto
  * alquilerBs definido (el monto es por inquilino, no global).
- * Se prorratea por dias ocupados dentro del mes (segun fechaIngreso
- * y fechaSalida).
+ * Se cobra el mes completo en cualquier periodo en que el inquilino esté
+ * activo al menos un día (sin prorrateo por días ocupados).
  */
 function cobrosAlquiler(p, datos) {
-  var diasMes = Number(String(p.fin).slice(8, 10));
   var filas = [];
   (datos.inquilinos || []).forEach(function (inq) {
     if (inq.cobraAlquiler !== true) return;
     if (!activoEn(inq, p)) return;
     var mensual = red2(nz(inq.alquilerBs));
     if (mensual <= 0) return;
-    var dias = diasActivosEnPeriodo(inq, p);
-    if (dias <= 0) return;
-    var monto = dias >= diasMes ? mensual : red2(mensual * dias / diasMes);
-    if (monto <= 0) return;
+    if (diasActivosEnPeriodo(inq, p) <= 0) return;
+    var monto = mensual;
     var hab = nz(inq.habitaciones);
     filas.push({
       id: idCobro(p.prefix, inq.id, ALQUILER_ID),

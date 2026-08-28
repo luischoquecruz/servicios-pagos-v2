@@ -111,7 +111,7 @@ export function Servicios() {
         <table className="tabla">
           <thead>
             <tr>
-               <th>Servicio</th>
+               <th className="sticky-col">Servicio</th>
                <th>Método de pago</th>
                <th>Medida</th>
                <th>Extras</th>
@@ -128,7 +128,7 @@ export function Servicios() {
             )}
             {lista.map((s) => (
               <tr key={s.id}>
-                <td>
+                <td className="sticky-col">
                   <span className="celda-nombre">{s.nombre}</span>
                 </td>
                 <td>

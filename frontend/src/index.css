@@ -44,6 +44,7 @@ button {
 .app {
   display: flex;
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
 /* ---------- sidebar ---------- */
@@ -59,6 +60,7 @@ button {
   position: sticky;
   top: 0;
   height: 100vh;
+  height: 100dvh;
 }
 
 .sidebar-logo {
@@ -326,6 +328,54 @@ nav {
 .saldo-neg {
   color: var(--peligro);
   font-weight: 600;
+}
+
+/* Reporte general por gestión (agrupado por inquilino) */
+
+.tabla-gestion {
+  min-width: 760px;
+}
+
+.tabla-gestion .fila-grupo td {
+  background: var(--fondo);
+  font-weight: 600;
+  font-size: 13px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--borde);
+}
+
+.tabla-gestion .fila-grupo .celda-nombre {
+  font-size: 13.5px;
+}
+
+.tabla-gestion .fila-total td {
+  background: var(--fondo);
+  border-top: 2px solid var(--borde);
+  padding: 10px;
+  font-weight: 600;
+}
+
+.tabla-gestion tbody td:first-child:empty {
+  background: transparent;
+}
+
+.estado {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.estado-al-dia {
+  background: color-mix(in srgb, #16a34a 12%, var(--panel));
+  color: #15803d;
+}
+
+.estado-deuda {
+  background: color-mix(in srgb, var(--peligro) 12%, var(--panel));
+  color: var(--peligro);
 }
 
 .tabla-wrap {
@@ -1086,6 +1136,27 @@ nav {
   z-index: 2;
 }
 
+/* Columna fija reutilizable en cualquier tabla con scroll horizontal */
+.tabla-wrap .sticky-col,
+.tabla .sticky-col {
+  position: sticky;
+  left: 0;
+  background: var(--panel);
+  z-index: 1;
+  box-shadow: 1px 0 0 0 var(--borde);
+}
+
+.tabla tbody tr:hover .sticky-col {
+  background: #f8fafc;
+}
+
+.tabla-wrap thead .sticky-col,
+.tabla thead .sticky-col,
+.tabla-wrap .fila-total .sticky-col,
+.tabla .fila-total .sticky-col {
+  z-index: 2;
+}
+
 .tabla-cobros thead tr:first-child th {
   background: var(--fondo);
 }
@@ -1316,4 +1387,305 @@ nav {
 .simulacion-aplica {
   color: var(--info);
   font-weight: 600;
+}
+
+/* ---------- impresion / PDF del reporte ---------- */
+
+.imprimir-encabezado {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 12mm;
+  }
+
+  body {
+    background: #fff;
+  }
+
+  .sidebar,
+  .page-head,
+  .pestanas,
+  .toolbar,
+  .cargando {
+    display: none !important;
+  }
+
+  .app {
+    display: block !important;
+  }
+
+  .contenido {
+    padding: 0 !important;
+  }
+
+  .page {
+    max-width: none !important;
+    margin: 0 !important;
+  }
+
+  .imprimir-encabezado {
+    display: block !important;
+    margin-bottom: 14px;
+    border-bottom: 2px solid #0f766e;
+    padding-bottom: 8px;
+  }
+
+  .imprimir-encabezado h1 {
+    font-size: 20px;
+    margin: 0 0 4px;
+  }
+
+  .imprimir-encabezado .linea {
+    color: #475569;
+    font-size: 12px;
+  }
+
+  .area-imprimible .cards {
+    display: none !important;
+  }
+
+  .area-imprimible .panel {
+    border: 0;
+    box-shadow: none;
+    padding: 0;
+    margin-bottom: 10px;
+  }
+
+  .area-imprimible h3,
+  .area-imprimible p.muted {
+    display: none;
+  }
+
+  .tabla-wrap {
+    overflow: visible !important;
+  }
+
+  .tabla {
+    font-size: 11.5px;
+  }
+
+  .tabla thead {
+    display: table-header-group;
+  }
+
+  .tabla tr {
+    break-inside: avoid;
+  }
+
+  .tabla th,
+  .tabla td {
+    padding: 5px 8px !important;
+  }
+
+  .tabla-gestion {
+    min-width: 0 !important;
+  }
+
+  .estado {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  .estado-al-dia {
+    background: #dcfce7 !important;
+    color: #166534 !important;
+  }
+
+  .estado-deuda {
+    background: #fee2e2 !important;
+    color: #b91c1c !important;
+  }
+
+  .saldo-neg {
+    color: #b91c1c !important;
+  }
+
+  .fila-grupo td,
+  .fila-total td {
+    background: #f1f5f9 !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  .fila-grupo td,
+  .fila-total td,
+  .celda-nombre,
+  .tabla th {
+    font-weight: 700;
+  }
+}
+
+/* ==================== móviles: pulido ==================== */
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+@media (max-width: 900px) {
+  .contenido {
+    padding: 16px 14px;
+    padding-bottom: calc(24px + env(safe-area-inset-bottom));
+  }
+
+  .page-head {
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+  }
+
+  .sidebar {
+    padding-top: calc(6px + env(safe-area-inset-top));
+    padding-bottom: calc(6px + env(safe-area-inset-bottom));
+  }
+
+  .nav-item {
+    min-height: 42px;
+    align-items: center;
+  }
+
+  .contenido,
+  .panel {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .icon-btn {
+    min-width: 36px;
+    min-height: 36px;
+  }
+
+  .tabla-wrap {
+    overscroll-behavior: contain;
+  }
+}
+
+@media (max-width: 700px) {
+  .cards {
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .card {
+    padding: 12px 14px;
+  }
+
+  .card-value {
+    font-size: 17px;
+  }
+
+  .tabla {
+    font-size: 12.5px;
+  }
+
+  .tabla th {
+    font-size: 11px;
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+  }
+
+  .tabla th,
+  .tabla td {
+    padding: 7px 6px;
+  }
+
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .form-acciones {
+    flex-direction: column;
+  }
+
+  .form-acciones .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .campo-inline,
+  .asign-svc-row,
+  .extras-agregar {
+    flex-wrap: wrap;
+  }
+
+  .deuda-resumen {
+    flex-wrap: wrap;
+    gap: 8px 16px;
+  }
+
+  .toolbar {
+    gap: 8px;
+  }
+
+  .toolbar .btn {
+    flex: 0 0 auto;
+  }
+
+  .modal-overlay {
+    padding: 0;
+    align-items: flex-end;
+  }
+
+  .modal {
+    border-radius: 18px 18px 0 0;
+    max-height: 90dvh;
+    overflow-y: auto;
+  }
+
+  .modal::before {
+    content: "";
+    display: block;
+    height: 4px;
+    width: 42px;
+    border-radius: 999px;
+    background: var(--borde);
+    margin: 8px auto 0;
+  }
+
+  .modal-head {
+    padding-top: 6px;
+  }
+
+  .pestanas .tab {
+    min-height: 42px;
+    align-items: center;
+  }
+}
+
+@media (max-width: 480px) {
+  .contenido {
+    padding: 12px 10px;
+  }
+
+  .cards {
+    grid-template-columns: 1fr;
+  }
+
+  .page-head h2 {
+    font-size: 18px;
+  }
+
+  .nav-item {
+    padding: 8px 10px;
+    font-size: 12.5px;
+  }
+
+  .modal-acciones {
+    flex-direction: column-reverse;
+  }
+
+  .modal-acciones .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .mes-header {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .extra-chip {
+    max-width: 100%;
+    overflow: hidden;
+  }
 }
