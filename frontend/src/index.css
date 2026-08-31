@@ -333,7 +333,7 @@ nav {
 /* Reporte general por gestión (agrupado por inquilino) */
 
 .tabla-gestion {
-  min-width: 760px;
+  min-width: 700px;
 }
 
 .tabla-gestion .fila-grupo td {
@@ -1416,8 +1416,8 @@ nav {
 
 @media print {
   @page {
-    size: A4 landscape;
-    margin: 12mm;
+    size: A4 portrait;
+    margin: 10mm;
   }
 
   body {
@@ -1501,6 +1501,11 @@ nav {
 
   .tabla-gestion {
     min-width: 0 !important;
+    font-size: 10.5px;
+  }
+
+  .tabla-gestion .fila-grupo td {
+    font-size: 12px;
   }
 
   .estado {
