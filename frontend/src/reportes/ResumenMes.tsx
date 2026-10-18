@@ -3,7 +3,8 @@ import { useSnapshot } from '../components/SnapshotContext';
 import { Cargando } from '../components/ui/Cargando';
 import { Cifra, EstadoDeuda, Medidor, Seccion, SelectorMes } from '../components/Partes';
 import { IcoAlerta, IcoDescargar, IcoImprimir } from '../components/Iconos';
-import { mesLargo, resumenMes } from './modelo';
+import { mesLargo, repartoServicios, resumenMes } from './modelo';
+import { RepartoTarjeta } from '../components/Reparto';
 import { descargarCSV, fmtBs, mesActual } from '../utils';
 import { irA } from '../nav';
 
@@ -12,10 +13,11 @@ export function ResumenMesPag() {
   const { snap, deudas, info } = useSnapshot();
   const [periodo, setPeriodo] = useState(mesActual());
   const r = useMemo(() => (snap ? resumenMes(snap, periodo, deudas) : null), [snap, periodo, deudas]);
+  const repartos = useMemo(() => (snap ? repartoServicios(snap, periodo).filter((x) => x.lineas.length > 0) : []), [snap, periodo]);
   if (!snap || !r) return <Cargando />;
 
   const pct = r.cobrado > 0 ? Math.round((r.aplicado / r.cobrado) * 100) : 0;
-  const descuadres = r.porServicio.filter((s) => s.factura !== null && s.inquilinos > 0 && Math.abs(s.factura - s.repartido) > 0.01);
+  const descuadres = repartos.filter((x) => x.desactualizado.length > 0);
 
   const exportar = () => {
     const filas: (string | number)[][] = [['Inquilino', 'Cobro del mes', 'Pagado', 'Falta del mes', 'Deuda total']];
@@ -64,8 +66,8 @@ export function ResumenMesPag() {
         <div className="tarea" style={{ marginBottom: 16, cursor: 'default' }}>
           <IcoAlerta />
           <span>
-            Los cobros de {descuadres.map((s) => s.nombre).join(', ')} no suman lo mismo que su factura.
-            <small>Vuelve a generar los cobros de ese servicio en la sección Cobros.</small>
+            El reparto de {descuadres.map((s) => s.nombre).join(', ')} no coincide con las facturas o asignaciones actuales.
+            <small>Recalcúlalo en la sección Cobros.</small>
           </span>
           <button className="tarea-ir btn btn-fantasma no-imprimir" onClick={() => irA('cobros')}>Ir</button>
         </div>
@@ -101,41 +103,14 @@ export function ResumenMesPag() {
         </div>
       </Seccion>
 
-      <Seccion titulo="Por servicio" descripcion="Cada factura se reparte entre los inquilinos que usan el servicio; «Repartido» debe coincidir con la factura.">
-        <div className="tabla-wrap">
-          <table className="tabla">
-            <thead>
-              <tr>
-                <th>Servicio</th>
-                <th>Se reparte por</th>
-                <th className="num">Factura</th>
-                <th className="num">Repartido</th>
-              </tr>
-            </thead>
-            <tbody>
-              {r.porServicio.map((s) => (
-                <tr key={s.servicioId}>
-                  <td className="celda-nombre">{s.nombre}</td>
-                  <td className="muted">{String(s.metodo).toUpperCase() === 'PERSONAS' ? 'personas' : 'cuartos'} · {s.inquilinos} inquilino{s.inquilinos === 1 ? '' : 's'}</td>
-                  <td className="num">{s.factura === null ? <span className="muted">sin factura</span> : fmtBs(s.factura)}</td>
-                  <td className="num">{s.inquilinos ? fmtBs(s.repartido) : <span className="muted">sin generar</span>}</td>
-                </tr>
-              ))}
-              {r.alquiler > 0 && (
-                <tr>
-                  <td className="celda-nombre">Alquiler</td>
-                  <td className="muted">monto fijo por inquilino</td>
-                  <td className="num">—</td>
-                  <td className="num">{fmtBs(r.alquiler)}</td>
-                </tr>
-              )}
-              {r.porServicio.length === 0 && r.alquiler === 0 && (
-                <tr><td colSpan={5} className="vacio">Sin facturas este mes.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </Seccion>
+      {repartos.length > 0 && (
+        <>
+          <h3 className="titulo-seccion">Cómo se repartió cada factura</h3>
+          <div className="repartos">
+            {repartos.map((x) => <RepartoTarjeta key={x.servicioId} r={x} periodo={periodo} />)}
+          </div>
+        </>
+      )}
     </div>
   );
 }

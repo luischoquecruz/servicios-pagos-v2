@@ -1,114 +1,57 @@
-import { useState, useMemo, Fragment } from 'react';
+import { useMemo, useState } from 'react';
 import { useSnapshot } from '../components/SnapshotContext';
 import { generarCobros, generarCobrosServicio, getDiagnostico } from '../api';
-import { fmtBs, mesActual, nombreServicio, ALQUILER_ID } from '../utils';
-import { Boton } from '../components/ui/Boton';
+import { ALQUILER_ID, fmtBs, mesActual, nombreServicio } from '../utils';
 import { Aviso } from '../components/ui/Aviso';
-import type { Cobro, Pago, Inquilino } from '../types';
-
-/** Calcula deuda acumulada (cobrado - pagado) de TODOS los periodos por inquilino. */
-function deudaAcumulada(cobros: Cobro[], pagos: Pago[]): Map<string, number> {
-  const mapa = new Map<string, number>();
-  for (const c of cobros) {
-    mapa.set(c.inquilinoId, (mapa.get(c.inquilinoId) ?? 0) + (c.montoTotal || 0));
-  }
-  for (const p of pagos) {
-    if (p.inquilinoId) {
-      mapa.set(p.inquilinoId, (mapa.get(p.inquilinoId) ?? 0) - (p.montoBs || 0));
-    }
-  }
-  return mapa;
-}
+import { Cargando } from '../components/ui/Cargando';
+import { Cifra, EstadoDeuda, Seccion, SelectorMes } from '../components/Partes';
+import { RepartoTarjeta } from '../components/Reparto';
+import { IcoAlerta, IcoImprimir } from '../components/Iconos';
+import { fueraDelReparto, mesLargo, repartoServicios } from '../reportes/modelo';
+import { irA } from '../nav';
 
 interface Diagnostico {
   periodo: string;
-  servicios: { id: string; nombre: string }[];
-  inquilinos: { id: string; nombre: string; habilitado: boolean; fechaIngreso: string; fechaSalida: string | null }[];
-  asignacionesTotal: number;
-  asignaciones: {
-    id: string;
-    inquilinoId: string;
-    servicioId: string;
-    activo: boolean;
-    activoType: string;
-    inqExiste: boolean;
-    svcExiste: boolean;
-    habilitado: boolean;
-    enPeriodo: boolean;
-    pasa: boolean;
-  }[];
-  facturasTotal: number;
-  facturas: { id: string; servicioId: string; servicioNombre: string; montoBs: number; periodo: string }[];
-  costosPorServicio: Record<string, { nombre: string; costo: number }>;
+  asignaciones: { id: string; inquilinoId: string; servicioId: string; activo: boolean; inqExiste: boolean; svcExiste: boolean; habilitado: boolean; enPeriodo: boolean; pasa: boolean }[];
+  facturas: { id: string; servicioNombre: string; montoBs: number }[];
   cobrosGenerados: number;
 }
 
-/** Agrupa cobros por inquilinoId, manteniendo orden de aparición. */
-function agruparPorInquilino(cobros: Cobro[]) {
-  const mapa = new Map<string, Cobro[]>();
-  for (const c of cobros) {
-    const arr = mapa.get(c.inquilinoId) ?? [];
-    arr.push(c);
-    mapa.set(c.inquilinoId, arr);
-  }
-  return mapa;
-}
-
-/** Devuelve los servicios que aparecen en los cobros (orden establecido). */
-function serviciosEnCobros(cobros: Cobro[]): string[] {
-  const vistos = new Set<string>();
-  const ids: string[] = [];
-  for (const c of cobros) {
-    if (!vistos.has(c.servicioId)) {
-      vistos.add(c.servicioId);
-      ids.push(c.servicioId);
-    }
-  }
-  return ids;
-}
-
 export function Cobros() {
-  const { snap, recargar, mapInq, mapSvc } = useSnapshot();
+  const { snap, recargar, mapInq, mapSvc, deudas } = useSnapshot();
   const [periodo, setPeriodo] = useState(mesActual());
   const [aviso, setAviso] = useState<{ mensaje: string; tipo: 'ok' | 'error' } | null>(null);
   const [generando, setGenerando] = useState(false);
   const [diag, setDiag] = useState<Diagnostico | null>(null);
   const [cargandoDiag, setCargandoDiag] = useState(false);
-  const [vista, setVista] = useState<'tabla' | 'grupo'>('grupo');
 
-  const cobrosPeriodo = useMemo(
-    () => (snap?.cobros ?? []).filter((c) => c.periodo === periodo),
-    [snap?.cobros, periodo],
-  );
+  const datos = useMemo(() => {
+    if (!snap) return null;
+    const cobros = snap.cobros.filter((c) => c.periodo === periodo);
+    const repartos = repartoServicios(snap, periodo);
+    const alquileres = cobros.filter((c) => c.servicioId === ALQUILER_ID);
+    const fuera = fueraDelReparto(snap, periodo);
+    const porInq = new Map<string, Map<string, (typeof cobros)[number]>>();
+    for (const c of cobros) {
+      const m = porInq.get(c.inquilinoId) ?? new Map();
+      m.set(c.servicioId, c);
+      porInq.set(c.inquilinoId, m);
+    }
+    const svcIds = repartos.filter((r) => r.lineas.length > 0).map((r) => r.servicioId);
+    const total = cobros.reduce((s, c) => s + (c.montoTotal || 0), 0);
+    const totalAlquiler = alquileres.reduce((s, c) => s + (c.montoTotal || 0), 0);
+    return { cobros, repartos, alquileres, fuera, porInq, svcIds, total, totalAlquiler };
+  }, [snap, periodo]);
 
-  const agrupados = useMemo(() => agruparPorInquilino(cobrosPeriodo), [cobrosPeriodo]);
-  const svcIds = useMemo(() => serviciosEnCobros(cobrosPeriodo), [cobrosPeriodo]);
-
-  const total = cobrosPeriodo.reduce((a, c) => a + (c.montoTotal || 0), 0);
-
-  const deudas = useMemo(
-    () => deudaAcumulada(snap?.cobros ?? [], snap?.pagos ?? []),
-    [snap?.cobros, snap?.pagos],
-  );
-  const totalDeuda = useMemo(() => {
-    let s = 0;
-    for (const v of deudas.values()) if (v > 0) s += v;
-    return s;
-  }, [deudas]);
-
-  const handleGenerar = async (svcId?: string) => {
+  const generar = async (svcId?: string) => {
     setGenerando(true);
     setAviso(null);
     try {
-      const resultado = svcId
-        ? await generarCobrosServicio(periodo, svcId)
-        : await generarCobros(periodo);
+      const r = svcId ? await generarCobrosServicio(periodo, svcId) : await generarCobros(periodo);
       recargar();
-      if (!resultado || resultado.length === 0) {
-        setAviso({ mensaje: 'No se generaron cobros. Haga clic en "Diagnosticar" para ver el detalle.', tipo: 'error' });
-      } else {
-        setAviso({ mensaje: `Se generaron ${resultado.length} cobro(s) correctamente.`, tipo: 'ok' });
-      }
+      setAviso(r && r.length
+        ? { mensaje: svcId ? `${nombreServicio(svcId, mapSvc)} recalculado (${r.length} cobros).` : `Cobros de ${mesLargo(periodo)} generados (${r.length}).`, tipo: 'ok' }
+        : { mensaje: 'No se generó ningún cobro. Revisa que haya facturas y asignaciones, o abre el diagnóstico al final.', tipo: 'error' });
     } catch (e) {
       setAviso({ mensaje: e instanceof Error ? e.message : String(e), tipo: 'error' });
     } finally {
@@ -116,12 +59,10 @@ export function Cobros() {
     }
   };
 
-  const handleDiagnostico = async () => {
+  const diagnosticar = async () => {
     setCargandoDiag(true);
-    setDiag(null);
     try {
-      const d = await getDiagnostico(periodo);
-      setDiag(d as Diagnostico);
+      setDiag((await getDiagnostico(periodo)) as Diagnostico);
     } catch (e) {
       setAviso({ mensaje: e instanceof Error ? e.message : String(e), tipo: 'error' });
     } finally {
@@ -129,391 +70,188 @@ export function Cobros() {
     }
   };
 
+  if (!snap || !datos) return <Cargando />;
+  const { cobros, repartos, alquileres, fuera, porInq, svcIds, total, totalAlquiler } = datos;
+  const conFactura = repartos.filter((r) => r.factura !== null);
+  const totalFacturas = conFactura.reduce((s, r) => s + (r.factura ?? 0), 0);
+  const desactualizados = repartos.filter((r) => r.desactualizado.length > 0);
+
   return (
     <div className="page">
-      <div className="page-head">
-        <h2>Cobros mensuales</h2>
+      <div className="encabezado">
+        <div>
+          <h2>Cobros de {mesLargo(periodo)}</h2>
+          <p>Cómo se reparte cada factura y cuánto le toca pagar a cada inquilino.</p>
+        </div>
+        <div className="no-imprimir" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <SelectorMes periodo={periodo} onCambiar={setPeriodo} />
+          <button className="btn btn-primario" onClick={() => generar()} disabled={generando}>
+            {generando ? 'Calculando…' : cobros.length ? 'Recalcular todo el mes' : 'Generar cobros del mes'}
+          </button>
+          <button className="btn btn-secundario" onClick={() => window.print()}><IcoImprimir /> Imprimir</button>
+        </div>
       </div>
 
       {aviso && <Aviso tipo={aviso.tipo} mensaje={aviso.mensaje} onCerrar={() => setAviso(null)} />}
 
-      <div className="toolbar">
-        <label className="campo campo-inline">
-          <span className="campo-label">Periodo</span>
-          <input className="input" type="month" value={periodo} onChange={(e) => setPeriodo(e.target.value)} />
-        </label>
-        <div className="pestanas" role="tablist">
-          <button className={`tab ${vista === 'grupo' ? 'tab-activa' : ''}`} onClick={() => setVista('grupo')}>
-            Agrupado
-          </button>
-          <button className={`tab ${vista === 'tabla' ? 'tab-activa' : ''}`} onClick={() => setVista('tabla')}>
-            Detalle
-          </button>
-        </div>
-        <Boton onClick={() => handleGenerar()} disabled={generando}>
-          {generando ? 'Generando...' : 'Generar todos'}
-        </Boton>
-        <Boton variante="secundario" onClick={() => handleDiagnostico()} disabled={cargandoDiag}>
-          {cargandoDiag ? 'Cargando...' : 'Diagnosticar'}
-        </Boton>
+      <div className="ayuda">
+        {cobros.length === 0 ? (
+          <>Todavía no hay cobros en {mesLargo(periodo)}. Registra las facturas del mes, revisa las asignaciones y pulsa <strong>Generar cobros del mes</strong>.</>
+        ) : (
+          <>
+            En {mesLargo(periodo)} se repartieron <strong>{conFactura.length} {conFactura.length === 1 ? 'factura' : 'facturas'}</strong> por{' '}
+            <strong>{fmtBs(totalFacturas)}</strong> entre {porInq.size} inquilinos
+            {totalAlquiler > 0 && <>, más <strong>{fmtBs(totalAlquiler)}</strong> de alquileres</>}. En total hay que cobrar <strong>{fmtBs(total)}</strong>.
+          </>
+        )}
       </div>
 
-      {/* Resumen cards */}
-      <div className="cards">
-        <div className="card card-info">
-          <span className="card-label">Total cobrado (mes)</span>
-          <span className="card-value">{fmtBs(total)}</span>
-        </div>
-        <div className={`card ${totalDeuda > 0 ? 'card-mal' : 'card-ok'}`}>
-          <span className="card-label">Deuda acumulada</span>
-          <span className="card-value">{fmtBs(totalDeuda)}</span>
-        </div>
-        <div className="card card-info">
-          <span className="card-label">Cobros</span>
-          <span className="card-value">{cobrosPeriodo.length}</span>
-        </div>
-        <div className="card card-info">
-          <span className="card-label">Inquilinos</span>
-          <span className="card-value">{agrupados.size}</span>
-        </div>
-        <div className="card card-info">
-          <span className="card-label">Servicios</span>
-          <span className="card-value">{svcIds.length}</span>
-        </div>
+      <div className="cifras">
+        <Cifra etiqueta="Total a cobrar" valor={fmtBs(total)} />
+        <Cifra etiqueta="Servicios" valor={fmtBs(total - totalAlquiler)} nota={`${svcIds.length} servicios`} />
+        <Cifra etiqueta="Alquileres" valor={fmtBs(totalAlquiler)} nota={`${alquileres.length} inquilinos`} />
+        <Cifra etiqueta="Inquilinos" valor={String(porInq.size)} nota="con cobros este mes" />
       </div>
 
-      {vista === 'grupo' ? (
-        <CobrosAgrupados
-          agrupados={agrupados}
-          svcIds={svcIds}
-          mapInq={mapInq}
-          mapSvc={mapSvc}
-          deudas={deudas}
-        />
-      ) : (
-        <CobrosDetalle
-          cobros={cobrosPeriodo}
-          mapInq={mapInq}
-          mapSvc={mapSvc}
-          onRegenerar={handleGenerar}
-          generando={generando}
-        />
+      {(fuera.length > 0 || desactualizados.length > 0) && (
+        <div className="tareas" style={{ marginBottom: 16 }}>
+          {fuera.map((f) => (
+            <div key={f.nombre} className="tarea" style={{ cursor: 'default' }}>
+              <IcoAlerta />
+              <span>
+                {f.nombre} vivió en la casa en {mesLargo(periodo)} pero no participa en ningún cobro: {f.motivo}.
+                <small>Si debe pagar, asígnale servicios en Asignaciones (habilítalo si hace falta) y recalcula.</small>
+              </span>
+              <button className="tarea-ir btn btn-fantasma no-imprimir" onClick={() => irA('asignaciones')}>Asignar</button>
+            </div>
+          ))}
+          {desactualizados.length > 0 && (
+            <div className="tarea" style={{ cursor: 'default' }}>
+              <IcoAlerta />
+              <span>
+                {desactualizados.length === 1 ? 'Un reparto no coincide' : `${desactualizados.length} repartos no coinciden`} con las asignaciones actuales: {desactualizados.map((r) => r.nombre).join(', ')}.
+                <small>Revisa el detalle en cada servicio y recalcúlalo.</small>
+              </span>
+            </div>
+          )}
+        </div>
       )}
 
-      {/* Diagnostico */}
-      {diag && (
-        <div className="panel" style={{ marginTop: 16 }}>
-          <div className="panel-head">
-            <h3>Diagnostico del periodo {diag.periodo}</h3>
+      {repartos.length > 0 && (
+        <>
+          <h3 className="titulo-seccion">Cómo se repartió cada servicio</h3>
+          <div className="repartos">
+            {repartos.map((r) => (
+              <RepartoTarjeta key={r.servicioId} r={r} periodo={periodo} onRegenerar={generar} generando={generando} />
+            ))}
+            {alquileres.length > 0 && (
+              <section className="seccion reparto">
+                <div className="reparto-cab">
+                  <div>
+                    <h3>Alquiler</h3>
+                    <span className="muted">Monto fijo acordado con cada inquilino</span>
+                  </div>
+                  <div className="reparto-factura">
+                    <span className="cifra-etiqueta">Total</span>
+                    <strong>{fmtBs(totalAlquiler)}</strong>
+                  </div>
+                </div>
+                <div className="lista">
+                  {alquileres.map((c) => (
+                    <div key={c.id} className="lista-fila">
+                      <span>{mapInq.get(c.inquilinoId)?.nombre ?? c.inquilinoId}</span>
+                      <span className="monto">{fmtBs(c.montoTotal)}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
           </div>
-          <div className="diag-grid">
-            <div className="diag-box">
-              <div className="diag-label">Servicios</div>
-              <div className="diag-valor">{diag.servicios.length}</div>
-              {diag.servicios.map((s) => (
-                <div key={s.id} className="diag-detalle">{s.nombre}</div>
-              ))}
-            </div>
-            <div className="diag-box">
-              <div className="diag-label">Inquilinos</div>
-              <div className="diag-valor">{diag.inquilinos.length}</div>
-              {diag.inquilinos.map((i) => (
-                <div key={i.id} className="diag-detalle">
-                  {i.nombre} — hab={String(i.habilitado)}, ing={i.fechaIngreso ?? '?'}
-                </div>
-              ))}
-            </div>
-            <div className="diag-box">
-              <div className="diag-label">Asignaciones</div>
-              <div className="diag-valor">{diag.asignacionesTotal}</div>
-              {diag.asignaciones.map((a) => (
-                <div key={a.id} className={`diag-detalle ${a.pasa ? 'diag-ok' : 'diag-fail'}`}>
-                  {a.pasa ? '✓' : '✗'} inq={a.inquilinoId} svc={a.servicioId} activo={String(a.activo)}
-                </div>
-              ))}
-            </div>
-            <div className="diag-box">
-              <div className="diag-label">Facturas</div>
-              <div className="diag-valor">{diag.facturasTotal}</div>
-              {diag.facturas.map((f) => (
-                <div key={f.id} className="diag-detalle diag-ok">{f.servicioNombre}: {fmtBs(f.montoBs)}</div>
-              ))}
-            </div>
-            <div className="diag-box">
-              <div className="diag-label">Costo por servicio</div>
-              {Object.entries(diag.costosPorServicio).map(([svcId, info]) => (
-                <div key={svcId} className={`diag-detalle ${info.costo > 0 ? 'diag-ok' : 'diag-fail'}`}>
-                  {info.nombre}: {fmtBs(info.costo)}
-                </div>
-              ))}
-            </div>
-            <div className="diag-box">
-              <div className="diag-label">Cobros generados</div>
-              <div className={`diag-valor ${diag.cobrosGenerados > 0 ? 'diag-ok' : 'diag-fail'}`}>{diag.cobrosGenerados}</div>
-            </div>
-          </div>
-        </div>
+        </>
       )}
-    </div>
-  );
-}
 
-/** Vista agrupada: tabla con inquilinos como filas, servicios como grupos de columnas. */
-function CobrosAgrupados({
-  agrupados,
-  svcIds,
-  mapInq,
-  mapSvc,
-  deudas,
-}: {
-  agrupados: Map<string, Cobro[]>;
-  svcIds: string[];
-  mapInq: Map<string, Inquilino>;
-  mapSvc: Map<string, import('../types').Servicio>;
-  deudas: Map<string, number>;
-}) {
-  if (agrupados.size === 0) {
-    return (
-      <div className="panel">
-        <div className="muted" style={{ padding: '20px', textAlign: 'center' }}>
-          No hay cobros para este periodo. Haga clic en "Generar todos" o "Diagnosticar" para ver por qué.
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="panel">
-      <div className="panel-head">
-        <h3>Detalle por inquilino</h3>
-      </div>
-      <div className="tabla-wrap">
-        <table className="tabla tabla-cobros">
-          <thead>
-            <tr>
-              <th className="sticky-col" rowSpan={2}>Inquilino</th>
-              <th className="centro" rowSpan={2}>Cuartos</th>
-              <th className="centro" rowSpan={2}>Personas</th>
-              {svcIds.map((svcId) => {
-                return (
-                  <th key={svcId} className="centro grupo-svc" colSpan={3}>
-                    {nombreServicio(svcId, mapSvc)}
-                  </th>
-                );
-              })}
-              <th className="num grupo-total" rowSpan={2}>Total mes</th>
-              <th className="num grupo-deuda" rowSpan={2}>Deuda acum.</th>
-            </tr>
-            <tr>
-              {svcIds.map((svcId) => (
-                <Fragment key={svcId}>
-                  <th className="num">Factor</th>
-                  <th className="num">Extras</th>
-                  <th className="num">Total</th>
-                </Fragment>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {[...agrupados.entries()].map(([inqId, cobros]) => {
-              const inq = mapInq.get(inqId);
-              let totalInq = 0;
-              const datosSvc = new Map<string, Cobro>();
-              for (const c of cobros) {
-                datosSvc.set(c.servicioId, c);
-                totalInq += c.montoTotal;
-              }
-
-              return (
-                <tr key={inqId}>
-                  <td className="celda-nombre sticky-col">{inq?.nombre ?? inqId}</td>
-                  <td className="centro">{inq?.habitaciones ?? '?'}</td>
-                  <td className="centro">{inq?.personas ?? '?'}</td>
-                  {svcIds.map((svcId) => {
-                    const c = datosSvc.get(svcId);
-                    if (!c) {
-                      return (
-                        <Fragment key={svcId}>
-                          <td className="centro muted">—</td>
-                          <td className="centro muted">—</td>
-                          <td className="centro muted">—</td>
-                        </Fragment>
-                      );
-                    }
-                    const extrasCount = Object.values(c.extras ?? {}).reduce((s, v) => s + (v ?? 0), 0);
+      {porInq.size > 0 && (
+        <Seccion titulo="Total por inquilino" descripcion="Lo que cada uno debe pagar este mes. Toca un nombre para ver su estado de cuenta.">
+          <div className="tabla-wrap">
+            <table className="tabla">
+              <thead>
+                <tr>
+                  <th className="sticky-col">Inquilino</th>
+                  {svcIds.map((id) => <th key={id} className="num">{nombreServicio(id, mapSvc)}</th>)}
+                  {alquileres.length > 0 && <th className="num">Alquiler</th>}
+                  <th className="num">Total del mes</th>
+                  <th>Deuda total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...porInq.entries()]
+                  .sort((a, b) => (mapInq.get(a[0])?.nombre ?? '').localeCompare(mapInq.get(b[0])?.nombre ?? ''))
+                  .map(([inqId, m]) => {
+                    const tot = [...m.values()].reduce((s, c) => s + (c.montoTotal || 0), 0);
                     return (
-                      <Fragment key={svcId}>
-                        <td className="num">{c.peso}</td>
-                        <td className="num">
-                          {extrasCount > 0 ? (
-                            <span className="extras-badge" title={Object.entries(c.extras ?? {}).map(([k, v]) => `${k}: ${v}`).join(', ')}>
-                              +{extrasCount}
-                            </span>
-                          ) : (
-                            <span className="muted">0</span>
-                          )}
-                        </td>
-                        <td className="num"><strong>{fmtBs(c.montoTotal)}</strong></td>
-                      </Fragment>
+                      <tr key={inqId} onClick={() => irA('reportes', { tab: 'cuenta', inq: inqId })} style={{ cursor: 'pointer' }}>
+                        <td className="sticky-col celda-nombre">{mapInq.get(inqId)?.nombre ?? inqId}</td>
+                        {svcIds.map((id) => {
+                          const c = m.get(id);
+                          return (
+                            <td key={id} className="num">
+                              {c ? <>{fmtBs(c.montoTotal)}<span className="mini-parte">{c.peso} de {c.pesoTotal} partes</span></> : <span className="muted">—</span>}
+                            </td>
+                          );
+                        })}
+                        {alquileres.length > 0 && <td className="num">{m.get(ALQUILER_ID) ? fmtBs(m.get(ALQUILER_ID)!.montoTotal) : <span className="muted">—</span>}</td>}
+                        <td className="num"><strong>{fmtBs(tot)}</strong></td>
+                        <td><EstadoDeuda saldo={deudas.get(inqId)?.saldo ?? 0} /></td>
+                      </tr>
                     );
                   })}
-                  <td className="num grupo-total"><strong>{fmtBs(totalInq)}</strong></td>
-                  <td className="num grupo-deuda">
-                    {(() => {
-                      const d = deudas.get(inqId) ?? 0;
-                      return d > 0 ? <span className="saldo-neg">{fmtBs(d)}</span> : <span className="muted">{fmtBs(d)}</span>;
-                    })()}
-                  </td>
+              </tbody>
+              <tfoot>
+                <tr className="fila-total">
+                  <td className="sticky-col">Total</td>
+                  {svcIds.map((id) => <td key={id} className="num">{fmtBs(repartos.find((r) => r.servicioId === id)?.repartido ?? 0)}</td>)}
+                  {alquileres.length > 0 && <td className="num">{fmtBs(totalAlquiler)}</td>}
+                  <td className="num"><strong>{fmtBs(total)}</strong></td>
+                  <td />
                 </tr>
-              );
-            })}
-          </tbody>
-          <tfoot>
-            {(() => {
-              // Precompute data for footer rows
-              const datosSvc = svcIds.map((svcId) => {
-                let totalSvc = 0;
-                let pesoTotalSvc = 0;
-                for (const [, cobros] of agrupados) {
-                  const c = cobros.find((x) => x.servicioId === svcId);
-                  if (c) {
-                    totalSvc += c.montoTotal;
-                    pesoTotalSvc += c.peso;
-                  }
-                }
-                const svc = mapSvc.get(svcId);
-                const unitario = pesoTotalSvc > 0 ? totalSvc / pesoTotalSvc : 0;
-                return { svcId, totalSvc, pesoTotalSvc, unitario, metodoPago: svc?.metodoPago };
-              });
-              const totalGeneral = datosSvc.reduce((s, d) => s + d.totalSvc, 0);
-              let totalDeudaGeneral = 0;
-              for (const v of deudas.values()) if (v > 0) totalDeudaGeneral += v;
+              </tfoot>
+            </table>
+          </div>
+        </Seccion>
+      )}
 
-              return (
-                <>
-                  <tr className="fila-unitario">
-                    <td className="sticky-col"><strong>Costo unitario</strong></td>
-                    <td colSpan={2}></td>
-                    {datosSvc.map(({ svcId, unitario, pesoTotalSvc, metodoPago }) => (
-                      <Fragment key={svcId}>
-                        <td></td>
-                        <td className="num muted" colSpan={1}>
-                          {pesoTotalSvc > 0 ? (
-                            <span className="unitario-badge" title={`${pesoTotalSvc} unidades en total`}>
-                              {fmtBs(unitario)}/{metodoPago === 'PERSONAS' ? 'pers' : 'cuar'}
-                            </span>
-                          ) : '—'}
-                        </td>
-                        <td></td>
-                      </Fragment>
-                    ))}
-                    <td className="num grupo-total"></td>
-                    <td className="num grupo-deuda"></td>
-                  </tr>
-                  <tr className="fila-total">
-                    <td className="sticky-col"><strong>Total</strong></td>
-                    <td colSpan={2}></td>
-                    {datosSvc.map(({ svcId, totalSvc }) => (
-                      <Fragment key={svcId}>
-                        <td></td>
-                        <td></td>
-                        <td className="num"><strong>{fmtBs(totalSvc)}</strong></td>
-                      </Fragment>
-                    ))}
-                    <td className="num grupo-total"><strong>{fmtBs(totalGeneral)}</strong></td>
-                    <td className="num grupo-deuda"><strong className={totalDeudaGeneral > 0 ? 'saldo-neg' : ''}>{fmtBs(totalDeudaGeneral)}</strong></td>
-                  </tr>
-                </>
-              );
-            })()}
-          </tfoot>
-        </table>
-      </div>
+      <details className="seccion tecnico no-imprimir">
+        <summary>¿Falta un cobro? Diagnóstico técnico</summary>
+        <p className="muted">Revisa qué asignaciones y facturas encuentra el sistema para {mesLargo(periodo)}.</p>
+        <button className="btn btn-secundario" onClick={diagnosticar} disabled={cargandoDiag}>
+          {cargandoDiag ? 'Revisando…' : 'Revisar ahora'}
+        </button>
+        {diag && (
+          <div className="lista" style={{ marginTop: 10 }}>
+            {diag.asignaciones.map((a) => (
+              <div key={a.id} className="lista-fila">
+                <span>
+                  {mapInq.get(a.inquilinoId)?.nombre ?? a.inquilinoId} · {nombreServicio(a.servicioId, mapSvc)}
+                  <small>
+                    {a.pasa ? 'Se incluye en el reparto' : [
+                      !a.activo && 'asignación inactiva',
+                      !a.inqExiste && 'el inquilino no existe',
+                      !a.svcExiste && 'el servicio no existe',
+                      a.inqExiste && !a.habilitado && 'inquilino deshabilitado',
+                      a.inqExiste && a.habilitado && !a.enPeriodo && 'no vivía en la casa ese mes',
+                    ].filter(Boolean).join(', ')}
+                  </small>
+                </span>
+                <span className={a.pasa ? 'texto-ok' : 'texto-debe'}>{a.pasa ? 'Incluido' : 'Excluido'}</span>
+              </div>
+            ))}
+            {diag.facturas.map((f) => (
+              <div key={f.id} className="lista-fila"><span>Factura {f.servicioNombre}</span><span className="monto">{fmtBs(f.montoBs)}</span></div>
+            ))}
+            {diag.asignaciones.length === 0 && <div className="vacio">No hay asignaciones en {mesLargo(periodo)}.</div>}
+          </div>
+        )}
+      </details>
     </div>
   );
 }
-
-/** Vista tabla plana: detalle linea por linea. */
-function CobrosDetalle({
-  cobros,
-  mapInq,
-  mapSvc,
-  onRegenerar,
-  generando,
-}: {
-  cobros: Cobro[];
-  mapInq: Map<string, import('../types').Inquilino>;
-  mapSvc: Map<string, import('../types').Servicio>;
-  onRegenerar: (svcId?: string) => void;
-  generando: boolean;
-}) {
-  if (cobros.length === 0) {
-    return (
-      <div className="panel">
-        <div className="muted" style={{ padding: '20px', textAlign: 'center' }}>
-          No hay cobros para este periodo.
-        </div>
-      </div>
-    );
-  }
-
-  const extraKeys = new Set<string>();
-  for (const c of cobros) {
-    for (const k of Object.keys(c.extras ?? {})) extraKeys.add(k);
-  }
-  const extras = [...extraKeys].sort();
-
-  return (
-    <div className="panel">
-      <div className="panel-head">
-        <h3>Detalle linea por linea</h3>
-      </div>
-      <div className="tabla-wrap">
-        <table className="tabla">
-          <thead>
-            <tr>
-              <th>Inquilino</th>
-              <th>Servicio</th>
-              <th className="centro">Cuartos</th>
-              <th className="centro">Personas</th>
-              {extras.map((k) => (
-                <th key={k} className="num">{k}</th>
-              ))}
-              <th className="num">Factor</th>
-              <th className="num">Reparto</th>
-              <th className="num">Total</th>
-              <th className="acciones">Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
-            {cobros.map((c) => {
-              const inq = mapInq.get(c.inquilinoId);
-              return (
-                <tr key={c.id}>
-                  <td className="celda-nombre">{inq?.nombre ?? c.inquilinoId}</td>
-                  <td>{nombreServicio(c.servicioId, mapSvc)}</td>
-                  <td className="centro">{c.habitaciones}</td>
-                  <td className="centro">{c.personas}</td>
-                  {extras.map((k) => (
-                    <td key={k} className="num">{(c.extras ?? {})[k] ?? 0}</td>
-                  ))}
-                  <td className="num">{c.peso}</td>
-                  <td className="num">{fmtBs(c.montoBase)}</td>
-                  <td className="num"><strong>{fmtBs(c.montoTotal)}</strong></td>
-                  <td className="acciones">
-                    {c.servicioId !== ALQUILER_ID && (
-                      <Boton variante="secundario" className="btn-mini" onClick={() => onRegenerar(c.servicioId)} disabled={generando}>
-                        Regenerar
-                      </Boton>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
