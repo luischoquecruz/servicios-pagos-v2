@@ -178,6 +178,7 @@ export function Cobros() {
                 <tr>
                   <th className="sticky-col">Inquilino</th>
                   {svcIds.map((id) => <th key={id} className="num">{nombreServicio(id, mapSvc)}</th>)}
+                  <th className="num col-subtotal">Total servicios</th>
                   {alquileres.length > 0 && <th className="num">Alquiler</th>}
                   <th className="num">Total del mes</th>
                   <th>Deuda total</th>
@@ -188,6 +189,7 @@ export function Cobros() {
                   .sort((a, b) => (mapInq.get(a[0])?.nombre ?? '').localeCompare(mapInq.get(b[0])?.nombre ?? ''))
                   .map(([inqId, m]) => {
                     const tot = [...m.values()].reduce((s, c) => s + (c.montoTotal || 0), 0);
+                    const totServ = [...m.values()].filter((c) => c.servicioId !== ALQUILER_ID).reduce((s, c) => s + (c.montoTotal || 0), 0);
                     return (
                       <tr key={inqId} onClick={() => irA('reportes', { tab: 'cuenta', inq: inqId })} style={{ cursor: 'pointer' }}>
                         <td className="sticky-col celda-nombre">{mapInq.get(inqId)?.nombre ?? inqId}</td>
@@ -199,6 +201,7 @@ export function Cobros() {
                             </td>
                           );
                         })}
+                        <td className="num col-subtotal">{fmtBs(totServ)}</td>
                         {alquileres.length > 0 && <td className="num">{m.get(ALQUILER_ID) ? fmtBs(m.get(ALQUILER_ID)!.montoTotal) : <span className="muted">—</span>}</td>}
                         <td className="num"><strong>{fmtBs(tot)}</strong></td>
                         <td><EstadoDeuda saldo={deudas.get(inqId)?.saldo ?? 0} /></td>
@@ -210,6 +213,7 @@ export function Cobros() {
                 <tr className="fila-total">
                   <td className="sticky-col">Total</td>
                   {svcIds.map((id) => <td key={id} className="num">{fmtBs(repartos.find((r) => r.servicioId === id)?.repartido ?? 0)}</td>)}
+                  <td className="num col-subtotal">{fmtBs(total - totalAlquiler)}</td>
                   {alquileres.length > 0 && <td className="num">{fmtBs(totalAlquiler)}</td>}
                   <td className="num"><strong>{fmtBs(total)}</strong></td>
                   <td />

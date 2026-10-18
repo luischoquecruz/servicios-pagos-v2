@@ -7,6 +7,8 @@ import { Cargando } from '../components/ui/Cargando';
 import { Boton } from '../components/ui/Boton';
 import { Aviso } from '../components/ui/Aviso';
 import { irA } from '../nav';
+import { FiltroConceptos, useFiltroConceptos } from '../components/FiltroConceptos';
+import type { Filtro } from '../reportes/modelo';
 import { ResumenMesPag } from '../reportes/ResumenMes';
 import { EstadoCuentaPag } from '../reportes/EstadoCuenta';
 import { HistorialPag } from '../reportes/Historial';
@@ -24,6 +26,8 @@ const PESTANAS: { id: Pestaña; texto: string }[] = [
 export function Reportes({ params }: { params: URLSearchParams }) {
   const pestaña = (PESTANAS.find((p) => p.id === params.get('tab'))?.id ?? 'mes') as Pestaña;
   const [periodo, setPeriodo] = useState(mesActual());
+  const { snap } = useSnapshot();
+  const [filtro, setExcluidos] = useFiltroConceptos(snap);
 
   return (
     <div className="page">
@@ -40,11 +44,13 @@ export function Reportes({ params }: { params: URLSearchParams }) {
         ))}
       </div>
 
-      {pestaña === 'mes' && <ResumenMesPag />}
-      {pestaña === 'cuenta' && <EstadoCuentaPag inquilinoId={params.get('inq')} />}
-      {pestaña === 'anual' && <HistorialPag />}
-      {pestaña === 'detalle' && <ReporteMensualPag periodo={periodo} onPeriodo={setPeriodo} />}
-      {pestaña === 'gestion' && <ReporteGeneralPag />}
+      {snap && <FiltroConceptos snap={snap} filtro={filtro} onCambiar={setExcluidos} />}
+
+      {pestaña === 'mes' && <ResumenMesPag filtro={filtro} />}
+      {pestaña === 'cuenta' && <EstadoCuentaPag inquilinoId={params.get('inq')} conceptos={filtro} />}
+      {pestaña === 'anual' && <HistorialPag filtro={filtro} />}
+      {pestaña === 'detalle' && <ReporteMensualPag periodo={periodo} onPeriodo={setPeriodo} filtro={filtro} />}
+      {pestaña === 'gestion' && <ReporteGeneralPag filtro={filtro} />}
     </div>
   );
 }
@@ -72,6 +78,8 @@ function ResumenCards({ cobrado, pagado, saldo }: { cobrado: number; pagado: num
 interface FilaPorInquilino {
   inquilinoId: string;
   nombre: string;
+  servicios: number;
+  alquiler: number;
   cobrado: number;
   pagado: number;
   saldo: number;
@@ -124,19 +132,31 @@ function nombreDeServicio(svcId: string, mapSvc: Map<string, Servicio>): string 
  * antigua). Así un pago general que cubre meses adeudados aparece pagado en el
  * mes que corresponda y no como "saldo a favor" del mes en que se registró.
  */
-function calcularMensual(snap: Snapshot, periodo: string, mapSvc: Map<string, Servicio>): MensualLocal {
+function calcularMensual(snap: Snapshot, periodo: string, mapSvc: Map<string, Servicio>, filtro?: Filtro): MensualLocal {
+  const incluye = (id: string) => !filtro || filtro.has(id);
   const porInq: FilaPorInquilino[] = [];
   const porSvc = new Map<string, FilaPorServicio>();
   const detalle: FilaDetalleMensual[] = [];
 
   for (const inq of snap.inquilinos) {
     const d = calcularDeudaPorConcepto(inq.id, snap.cobros, snap.pagos);
-    const fila = d.mensual.find((m) => m.periodo === periodo);
-    if (!fila || (fila.cobrado <= 0.005 && fila.pagado <= 0.005)) continue;
+    let fServ = 0;
+    let fAlq = 0;
+    let fPag = 0;
+    for (const [k, c] of d.detalleMes.get(periodo) ?? []) {
+      if (!incluye(k)) continue;
+      if (k === ALQUILER_ID) fAlq += c.cobrado;
+      else fServ += c.cobrado;
+      fPag += c.pagado;
+    }
+    const fila = { cobrado: fServ + fAlq, pagado: fPag, saldo: fServ + fAlq - fPag };
+    if (fila.cobrado <= 0.005 && fila.pagado <= 0.005) continue;
 
     porInq.push({
       inquilinoId: inq.id,
       nombre: inq.nombre,
+      servicios: red2(fServ),
+      alquiler: red2(fAlq),
       cobrado: red2(fila.cobrado),
       pagado: red2(fila.pagado),
       saldo: red2(fila.saldo),
@@ -155,7 +175,7 @@ function calcularMensual(snap: Snapshot, periodo: string, mapSvc: Map<string, Se
       totalSaldo += s;
     }
 
-    const cobrosMes = snap.cobros.filter((c) => c.inquilinoId === inq.id && c.periodo === periodo);
+    const cobrosMes = snap.cobros.filter((c) => c.inquilinoId === inq.id && c.periodo === periodo && incluye(c.servicioId));
     const cobradoConc = new Map<string, number>();
     for (const c of cobrosMes) {
       cobradoConc.set(c.servicioId, (cobradoConc.get(c.servicioId) ?? 0) + (c.montoTotal || 0));
@@ -221,12 +241,12 @@ function calcularMensual(snap: Snapshot, periodo: string, mapSvc: Map<string, Se
   };
 }
 
-function ReporteMensualPag({ periodo, onPeriodo }: { periodo: string; onPeriodo: (p: string) => void }) {
+function ReporteMensualPag({ periodo, onPeriodo, filtro }: { periodo: string; onPeriodo: (p: string) => void; filtro: Filtro }) {
   const { snap, mapSvc, error } = useSnapshot();
 
   const r = useMemo<MensualLocal | null>(
-    () => (snap ? calcularMensual(snap, periodo, mapSvc) : null),
-    [snap, periodo, mapSvc],
+    () => (snap ? calcularMensual(snap, periodo, mapSvc, filtro) : null),
+    [snap, periodo, mapSvc, filtro],
   );
 
   if (!snap && !error) return <Cargando />;
@@ -274,6 +294,8 @@ function ReporteMensualPag({ periodo, onPeriodo }: { periodo: string; onPeriodo:
             <thead>
               <tr>
                 <th className="sticky-col">Inquilino</th>
+                <th className="num col-subtotal">Total servicios</th>
+                <th className="num">Alquiler</th>
                 <th className="num">Cobrado</th>
                 <th className="num">Pagado</th>
                 <th className="num">Deuda</th>
@@ -287,6 +309,8 @@ function ReporteMensualPag({ periodo, onPeriodo }: { periodo: string; onPeriodo:
                 return (
                   <tr key={t.inquilinoId}>
                     <td className="sticky-col">{t.nombre}</td>
+                    <td className="num col-subtotal">{fmtBs(t.servicios)}</td>
+                    <td className="num">{fmtBs(t.alquiler)}</td>
                     <td className="num">{fmtBs(t.cobrado)}</td>
                     <td className="num">{fmtBs(t.pagado)}</td>
                     <td className="num">
@@ -306,7 +330,7 @@ function ReporteMensualPag({ periodo, onPeriodo }: { periodo: string; onPeriodo:
               })}
               {r.porInquilino.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="muted">
+                  <td colSpan={7} className="muted">
                     Sin datos para este periodo.
                   </td>
                 </tr>
@@ -450,7 +474,7 @@ function estadoBadge(deudor: boolean) {
  * misma asignacion de pagos (primero al mes del pago, sobrante a la deuda mas
  * antigua) que la pantalla de Pagos, calculado desde el snapshot local.
  */
-function ReporteGeneralPag() {
+function ReporteGeneralPag({ filtro }: { filtro: Filtro }) {
   const { snap, info } = useSnapshot();
 
   const grupos = useMemo<GrupoGestion[]>(() => {
@@ -464,26 +488,27 @@ function ReporteGeneralPag() {
       if (deuda.mensual.length === 0) continue;
 
       const filas = deuda.mensual.map<FilaGestion>((m) => {
-        const celda = deuda.filas.find((f) => f.periodo === m.periodo);
         let alquiler = 0;
         let servicios = 0;
-        if (celda) {
-          for (const [clave, c] of celda.celdas) {
-            if (clave === ALQUILER_ID) alquiler += c.cobrado;
-            else if (clave !== '__general__') servicios += c.cobrado;
-          }
+        let pagado = 0;
+        for (const [clave, c] of deuda.detalleMes.get(m.periodo) ?? []) {
+          if (!filtro.has(clave)) continue;
+          if (clave === ALQUILER_ID) alquiler += c.cobrado;
+          else servicios += c.cobrado;
+          pagado += c.pagado;
         }
-        const saldo = red2(m.saldo);
+        const saldo = red2(servicios + alquiler - pagado);
         return {
           periodo: m.periodo,
           alquiler: red2(alquiler),
           servicios: red2(servicios),
-          cobrado: red2(m.cobrado),
-          pagado: red2(m.pagado),
+          cobrado: red2(servicios + alquiler),
+          pagado: red2(pagado),
           saldo,
           tieneDeuda: saldo > 0.005,
         };
-      });
+      }).filter((f) => f.cobrado > 0.005 || f.pagado > 0.005);
+      if (filas.length === 0) continue;
 
       const suma = (k: 'alquiler' | 'servicios' | 'cobrado' | 'pagado' | 'saldo') =>
         filas.reduce((s, f) => s + f[k], 0);
@@ -505,7 +530,7 @@ function ReporteGeneralPag() {
     // Deudores primero, luego por nombre.
     list.sort((a, b) => b.totSaldo - a.totSaldo || a.nombre.localeCompare(b.nombre));
     return list;
-  }, [snap]);
+  }, [snap, filtro]);
 
   const totales = useMemo(
     () => ({
@@ -574,7 +599,7 @@ function ReporteGeneralPag() {
               <tr>
                 <th>Inquilino</th>
                 <th>Periodo</th>
-                <th className="num">Servicios</th>
+                <th className="num col-subtotal">Total servicios</th>
                 <th className="num">Alquiler</th>
                 <th className="num">Total</th>
                 <th className="num">Pagado</th>
@@ -587,7 +612,7 @@ function ReporteGeneralPag() {
                 <Fragment key={g.inquilinoId}>
                   <tr className="fila-grupo">
                     <td colSpan={2} className="celda-nombre">{g.nombre}</td>
-                    <td className="num">{fmtBs(g.totServicios)}</td>
+                    <td className="num col-subtotal">{fmtBs(g.totServicios)}</td>
                     <td className="num">{fmtBs(g.totAlquiler)}</td>
                     <td className="num"><strong>{fmtBs(g.totCobrado)}</strong></td>
                     <td className="num">{fmtBs(g.totPagado)}</td>
@@ -598,7 +623,7 @@ function ReporteGeneralPag() {
                     <tr key={`${g.inquilinoId}-${f.periodo}`}>
                       <td />
                       <td>{nombreMes(f.periodo)}</td>
-                      <td className="num">{fmtBs(f.servicios)}</td>
+                      <td className="num col-subtotal">{fmtBs(f.servicios)}</td>
                       <td className="num">{fmtBs(f.alquiler)}</td>
                       <td className="num">{fmtBs(f.cobrado)}</td>
                       <td className="num">{fmtBs(f.pagado)}</td>
@@ -619,7 +644,7 @@ function ReporteGeneralPag() {
             <tfoot>
               <tr className="fila-total">
                 <td colSpan={2}>TOTAL GENERAL</td>
-                <td className="num">{fmtBs(totales.servicios)}</td>
+                <td className="num col-subtotal">{fmtBs(totales.servicios)}</td>
                 <td className="num">{fmtBs(totales.alquiler)}</td>
                 <td className="num"><strong>{fmtBs(totales.cobrado)}</strong></td>
                 <td className="num">{fmtBs(totales.pagado)}</td>

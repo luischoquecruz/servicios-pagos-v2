@@ -78,6 +78,66 @@ export function deudasPorInquilino(snap: Snapshot): Map<string, DeudaInquilino> 
   return out;
 }
 
+// ---------- filtro de conceptos (servicios y alquiler) ----------
+
+/** Conceptos incluidos en un reporte: ids de servicios y/o ALQUILER_ID. */
+export type Filtro = Set<string>;
+
+export interface Concepto {
+  id: string;
+  nombre: string;
+}
+
+/** Conceptos posibles: alquiler primero y luego los servicios. */
+export function conceptosDe(snap: Snapshot): Concepto[] {
+  return [{ id: ALQUILER_ID, nombre: 'Alquiler' }, ...snap.servicios.map((s) => ({ id: s.id, nombre: s.nombre }))];
+}
+
+export function filtroCompleto(snap: Snapshot): Filtro {
+  return new Set(conceptosDe(snap).map((c) => c.id));
+}
+
+/** true si el filtro incluye todos los conceptos (se usan los saldos completos, con saldo a favor). */
+export function esCompleto(snap: Snapshot, filtro: Filtro | undefined): boolean {
+  return !filtro || conceptosDe(snap).every((c) => filtro.has(c.id));
+}
+
+export interface MesFiltrado {
+  servicios: number;
+  alquiler: number;
+  cobrado: number;
+  pagado: number;
+  saldo: number;
+}
+
+/** Cobrado y pagado de un inquilino en un mes, solo con los conceptos del filtro. */
+export function mesFiltrado(d: DeudaInquilino, periodo: string, filtro?: Filtro): MesFiltrado {
+  let servicios = 0;
+  let alquiler = 0;
+  let pagado = 0;
+  for (const [k, c] of d.deuda.detalleMes.get(periodo) ?? []) {
+    if (filtro && !filtro.has(k)) continue;
+    if (k === ALQUILER_ID) alquiler += c.cobrado;
+    else servicios += c.cobrado;
+    pagado += c.pagado;
+  }
+  const cobrado = servicios + alquiler;
+  return { servicios: r2(servicios), alquiler: r2(alquiler), cobrado: r2(cobrado), pagado: r2(pagado), saldo: r2(cobrado - pagado) };
+}
+
+/** Saldo de un inquilino con el filtro (con todos los conceptos, incluye saldo a favor). */
+export function saldoFiltrado(snap: Snapshot, d: DeudaInquilino, filtro?: Filtro): { saldo: number; meses: string[] } {
+  if (esCompleto(snap, filtro)) return { saldo: d.saldo, meses: d.mesesPendientes };
+  let saldo = 0;
+  const meses: string[] = [];
+  for (const periodo of d.deuda.detalleMes.keys()) {
+    const m = mesFiltrado(d, periodo, filtro);
+    saldo += m.saldo;
+    if (m.saldo > CENTAVO) meses.push(periodo);
+  }
+  return { saldo: r2(saldo), meses: meses.sort() };
+}
+
 // ---------- resumen del mes ----------
 
 export interface FilaServicioMes {
@@ -93,6 +153,8 @@ export interface FilaServicioMes {
 export interface FilaInquilinoMes {
   inquilinoId: string;
   nombre: string;
+  servicios: number;
+  alquiler: number;
   cobrado: number;
   aplicado: number;
   pendiente: number;
@@ -115,13 +177,15 @@ export interface ResumenMes {
   hayCobros: boolean;
 }
 
-export function resumenMes(snap: Snapshot, periodo: string, deudas: Map<string, DeudaInquilino>): ResumenMes {
-  const cobros = snap.cobros.filter((c) => c.periodo === periodo);
-  const facturas = snap.pagos.filter((p) => esFactura(p) && p.periodo === periodo);
+export function resumenMes(snap: Snapshot, periodo: string, deudas: Map<string, DeudaInquilino>, filtro?: Filtro): ResumenMes {
+  const incluye = (id: string | null | undefined) => !filtro || (id != null && filtro.has(id));
+  const cobros = snap.cobros.filter((c) => c.periodo === periodo && incluye(c.servicioId));
+  const facturas = snap.pagos.filter((p) => esFactura(p) && p.periodo === periodo && incluye(p.servicioId));
   const abonos = snap.pagos.filter((p) => !esFactura(p) && p.periodo === periodo);
 
   const porServicio: FilaServicioMes[] = [];
   for (const s of snap.servicios) {
+    if (!incluye(s.id)) continue;
     const fs = facturas.filter((f) => f.servicioId === s.id);
     const cs = cobros.filter((c) => c.servicioId === s.id);
     if (fs.length === 0 && cs.length === 0) continue;
@@ -137,36 +201,43 @@ export function resumenMes(snap: Snapshot, periodo: string, deudas: Map<string, 
   }
 
   const porInquilino: FilaInquilinoMes[] = [];
+  let deudaTotal = 0;
+  let deudores = 0;
   for (const d of deudas.values()) {
-    const fila = d.deuda.mensual.find((m) => m.periodo === periodo);
-    if (!fila && d.saldo <= CENTAVO) continue;
+    const m = mesFiltrado(d, periodo, filtro);
+    const total = saldoFiltrado(snap, d, filtro);
+    if (total.saldo > CENTAVO) {
+      deudaTotal += total.saldo;
+      deudores++;
+    }
+    if (m.cobrado <= CENTAVO && total.saldo <= CENTAVO) continue;
     porInquilino.push({
       inquilinoId: d.inquilino.id,
       nombre: d.inquilino.nombre,
-      cobrado: r2(fila?.cobrado ?? 0),
-      aplicado: r2(fila?.pagado ?? 0),
-      pendiente: r2(Math.max(0, fila?.saldo ?? 0)),
-      saldoTotal: d.saldo,
-      mesesPendientes: d.mesesPendientes.length,
+      servicios: m.servicios,
+      alquiler: m.alquiler,
+      cobrado: m.cobrado,
+      aplicado: m.pagado,
+      pendiente: r2(Math.max(0, m.saldo)),
+      saldoTotal: total.saldo,
+      mesesPendientes: total.meses.length,
     });
   }
   porInquilino.sort((a, b) => b.pendiente - a.pendiente || b.saldoTotal - a.saldoTotal || a.nombre.localeCompare(b.nombre));
 
   const suma = (xs: number[]) => r2(xs.reduce((a, b) => a + b, 0));
-  const alquiler = suma(cobros.filter((c) => c.servicioId === ALQUILER_ID).map((c) => toNum(c.montoTotal)));
-  const cobrado = suma(cobros.map((c) => toNum(c.montoTotal)));
+  const cobrado = suma(porInquilino.map((f) => f.cobrado));
   const aplicado = suma(porInquilino.map((f) => f.aplicado));
-  const deudores = [...deudas.values()].filter((d) => d.saldo > CENTAVO);
   return {
     periodo,
     facturado: suma(facturas.map((f) => toNum(f.montoBs))),
-    servicios: r2(cobrado - alquiler),
-    alquiler,
+    servicios: suma(porInquilino.map((f) => f.servicios)),
+    alquiler: suma(porInquilino.map((f) => f.alquiler)),
     cobrado,
     aplicado,
     pendiente: r2(Math.max(0, cobrado - aplicado)),
-    deudaTotal: suma(deudores.map((d) => d.saldo)),
-    deudores: deudores.length,
+    deudaTotal: r2(deudaTotal),
+    deudores,
     porServicio,
     porInquilino,
     hayCobros: cobros.length > 0,
@@ -186,6 +257,8 @@ export interface LineaCuenta {
 export interface MesCuenta {
   periodo: string;
   lineas: LineaCuenta[];
+  servicios: number;
+  alquiler: number;
   cargos: number;
   pagos: Pago[];
   aplicado: number;
@@ -196,9 +269,13 @@ export interface MesCuenta {
 export interface EstadoCuenta {
   inquilino: Inquilino;
   meses: MesCuenta[];
+  servicios: number;
+  alquiler: number;
   cargos: number;
   pagado: number;
   saldo: number;
+  /** false si el reporte excluye algun concepto */
+  completo: boolean;
 }
 
 const fmt = (n: number) => 'Bs ' + n.toLocaleString('es-BO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -232,11 +309,14 @@ export function estadoCuenta(
   inquilinoId: string,
   deudas: Map<string, DeudaInquilino>,
   mapSvc: Map<string, Servicio>,
+  filtro?: Filtro,
 ): EstadoCuenta | null {
   const d = deudas.get(inquilinoId);
   if (!d) return null;
-  const cobros = snap.cobros.filter((c) => c.inquilinoId === inquilinoId);
-  const abonos = snap.pagos.filter((p) => p.inquilinoId === inquilinoId);
+  const completo = esCompleto(snap, filtro);
+  const incluye = (id: string | null) => !filtro || id === null || filtro.has(id);
+  const cobros = snap.cobros.filter((c) => c.inquilinoId === inquilinoId && incluye(c.servicioId));
+  const abonos = snap.pagos.filter((p) => p.inquilinoId === inquilinoId && incluye(p.servicioId));
   const periodos = [...new Set([...cobros.map((c) => c.periodo), ...abonos.map((p) => p.periodo)])].sort();
   let acumulado = 0;
   const meses: MesCuenta[] = periodos.map((periodo) => {
@@ -249,22 +329,27 @@ export function estadoCuenta(
         monto: r2(toNum(c.montoTotal)),
         explicacion: explicarCobro(c, snap, mapSvc),
       }));
-    const fila = d.deuda.mensual.find((m) => m.periodo === periodo);
+    const m = mesFiltrado(d, periodo, filtro);
     const cargos = r2(lineas.reduce((s, l) => s + l.monto, 0));
-    const aplicado = r2(fila?.pagado ?? 0);
-    const saldoMes = r2(cargos - aplicado);
+    const saldoMes = r2(cargos - m.pagado);
     acumulado = r2(acumulado + saldoMes);
     return {
       periodo,
       lineas,
+      servicios: r2(lineas.filter((l) => l.servicioId !== ALQUILER_ID).reduce((s, l) => s + l.monto, 0)),
+      alquiler: r2(lineas.filter((l) => l.servicioId === ALQUILER_ID).reduce((s, l) => s + l.monto, 0)),
       cargos,
       pagos: abonos.filter((p) => p.periodo === periodo).sort((a, b) => (a.fechaPago ?? '').localeCompare(b.fechaPago ?? '')),
-      aplicado,
+      aplicado: m.pagado,
       saldoMes,
       saldoAcumulado: acumulado,
     };
   });
-  return { inquilino: d.inquilino, meses, cargos: d.cargos, pagado: d.pagado, saldo: d.saldo };
+  const servicios = r2(meses.reduce((s, m) => s + m.servicios, 0));
+  const alquiler = r2(meses.reduce((s, m) => s + m.alquiler, 0));
+  const cargos = completo ? d.cargos : r2(servicios + alquiler);
+  const pagado = completo ? d.pagado : r2(meses.reduce((s, m) => s + m.aplicado, 0));
+  return { inquilino: d.inquilino, meses, servicios, alquiler, cargos, pagado, saldo: completo ? d.saldo : r2(cargos - pagado), completo };
 }
 
 /** Texto corto para enviar por WhatsApp. */
@@ -294,6 +379,8 @@ export function enlaceWhatsApp(celular: string | null | undefined, texto: string
 export interface MesHistorial {
   periodo: string;
   facturado: number;
+  servicios: number;
+  alquiler: number;
   cobrado: number;
   aplicado: number;
   pendiente: number;
@@ -303,7 +390,15 @@ export interface Historial {
   anio: string;
   meses: MesHistorial[];
   servicios: { servicioId: string; nombre: string; porMes: (number | null)[]; total: number }[];
-  inquilinos: { inquilinoId: string; nombre: string; porMes: { cobrado: number; saldo: number }[]; cobrado: number; saldo: number }[];
+  inquilinos: {
+    inquilinoId: string;
+    nombre: string;
+    porMes: { cobrado: number; saldo: number }[];
+    servicios: number;
+    alquiler: number;
+    cobrado: number;
+    saldo: number;
+  }[];
   totales: MesHistorial;
 }
 
@@ -315,22 +410,33 @@ export function aniosDisponibles(snap: Snapshot): string[] {
   return [...s].sort().reverse();
 }
 
-export function historialAnual(snap: Snapshot, anio: string, deudas: Map<string, DeudaInquilino>): Historial {
+export function historialAnual(snap: Snapshot, anio: string, deudas: Map<string, DeudaInquilino>, filtro?: Filtro): Historial {
+  const incluye = (id: string | null | undefined) => !filtro || (id != null && filtro.has(id));
   const periodos = Array.from({ length: 12 }, (_, i) => `${anio}-${String(i + 1).padStart(2, '0')}`);
-  const facturas = snap.pagos.filter((p) => esFactura(p) && p.periodo?.startsWith(anio));
+  const facturas = snap.pagos.filter((p) => esFactura(p) && p.periodo?.startsWith(anio) && incluye(p.servicioId));
   const meses = periodos.map<MesHistorial>((p) => {
-    const cobrado = snap.cobros.filter((c) => c.periodo === p).reduce((s, c) => s + toNum(c.montoTotal), 0);
+    let servicios = 0;
+    let alquiler = 0;
     let aplicado = 0;
-    for (const d of deudas.values()) aplicado += d.deuda.mensual.find((m) => m.periodo === p)?.pagado ?? 0;
+    for (const d of deudas.values()) {
+      const m = mesFiltrado(d, p, filtro);
+      servicios += m.servicios;
+      alquiler += m.alquiler;
+      aplicado += m.pagado;
+    }
+    const cobrado = servicios + alquiler;
     return {
       periodo: p,
       facturado: r2(facturas.filter((f) => f.periodo === p).reduce((s, f) => s + toNum(f.montoBs), 0)),
+      servicios: r2(servicios),
+      alquiler: r2(alquiler),
       cobrado: r2(cobrado),
       aplicado: r2(aplicado),
       pendiente: r2(Math.max(0, cobrado - aplicado)),
     };
   });
   const servicios = snap.servicios
+    .filter((s) => incluye(s.id))
     .map((s) => {
       const porMes = periodos.map((p) => {
         const fs = facturas.filter((f) => f.periodo === p && f.servicioId === s.id);
@@ -341,16 +447,15 @@ export function historialAnual(snap: Snapshot, anio: string, deudas: Map<string,
     .filter((s) => s.porMes.some((v) => v !== null));
   const inquilinos = [...deudas.values()]
     .map((d) => {
-      const porMes = periodos.map((p) => {
-        const m = d.deuda.mensual.find((x) => x.periodo === p);
-        return { cobrado: r2(m?.cobrado ?? 0), saldo: r2(m?.saldo ?? 0) };
-      });
+      const ms = periodos.map((p) => mesFiltrado(d, p, filtro));
       return {
         inquilinoId: d.inquilino.id,
         nombre: d.inquilino.nombre,
-        porMes,
-        cobrado: r2(porMes.reduce((a, v) => a + v.cobrado, 0)),
-        saldo: r2(porMes.reduce((a, v) => a + Math.max(0, v.saldo), 0)),
+        porMes: ms.map((m) => ({ cobrado: m.cobrado, saldo: m.saldo })),
+        servicios: r2(ms.reduce((a, m) => a + m.servicios, 0)),
+        alquiler: r2(ms.reduce((a, m) => a + m.alquiler, 0)),
+        cobrado: r2(ms.reduce((a, m) => a + m.cobrado, 0)),
+        saldo: r2(ms.reduce((a, m) => a + Math.max(0, m.saldo), 0)),
       };
     })
     .filter((i) => i.cobrado > 0)
@@ -361,7 +466,10 @@ export function historialAnual(snap: Snapshot, anio: string, deudas: Map<string,
     meses,
     servicios,
     inquilinos,
-    totales: { periodo: anio, facturado: tot('facturado'), cobrado: tot('cobrado'), aplicado: tot('aplicado'), pendiente: tot('pendiente') },
+    totales: {
+      periodo: anio, facturado: tot('facturado'), servicios: tot('servicios'), alquiler: tot('alquiler'),
+      cobrado: tot('cobrado'), aplicado: tot('aplicado'), pendiente: tot('pendiente'),
+    },
   };
 }
 

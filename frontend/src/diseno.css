@@ -1295,3 +1295,83 @@ details.tecnico summary {
   font-size: 16px;
   margin: 4px 0 12px;
 }
+
+/* ---------- filtro de conceptos ---------- */
+
+.filtro {
+  display: flex;
+  align-items: center;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+  background: var(--panel);
+  border: 1px solid var(--borde);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin-bottom: 16px;
+}
+
+.filtro-titulo {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--texto-suave);
+}
+
+.filtro-casillas {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.casilla-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--borde);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--texto-suave);
+  cursor: pointer;
+  user-select: none;
+}
+
+.casilla-chip input {
+  accent-color: var(--acento);
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.casilla-chip.activo {
+  border-color: var(--acento);
+  background: var(--acento-claro);
+  color: var(--acento-texto);
+}
+
+.filtro-rapido {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.filtro-rapido .btn {
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+.filtro-impreso {
+  display: none;
+}
+
+.col-subtotal {
+  background: color-mix(in srgb, var(--acento-claro) 55%, transparent);
+}
+
+@media print {
+  .filtro-impreso {
+    display: block;
+    font-size: 12px;
+    margin: 0 0 8px;
+  }
+}
