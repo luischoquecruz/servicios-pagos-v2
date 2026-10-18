@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.alquileres.app.model.Inquilino;
+import com.alquileres.app.service.Fechas;
 import com.alquileres.app.service.Ids;
 import com.alquileres.app.store.CasaStore;
 
@@ -36,7 +37,7 @@ public class InquilinoController {
         validar(body);
         body.setId(Ids.nuevo("inq"));
         if (body.getFechaIngreso() == null || body.getFechaIngreso().isBlank()) {
-            body.setFechaIngreso(java.time.LocalDate.now().toString());
+            body.setFechaIngreso(Fechas.hoy().toString());
         }
         store.upsertInquilino(body);
         return body;
@@ -50,8 +51,22 @@ public class InquilinoController {
         return body;
     }
 
+    /**
+     * Elimina SOLO si el inquilino no tiene historial (cobros ni pagos);
+     * con historial debe deshabilitarse. Sus asignaciones y servicios se borran.
+     */
     @DeleteMapping("/{id}")
     public void eliminar(@PathVariable String id) {
+        long cobros = store.listCobros().stream().filter(c -> id.equals(c.getInquilinoId())).count();
+        long pagos = store.listPagos().stream().filter(p -> id.equals(p.getInquilinoId())).count();
+        if (cobros > 0 || pagos > 0) {
+            throw new IllegalStateException("No se puede eliminar: el inquilino tiene " + cobros + " cobro(s) y "
+                    + pagos + " pago(s). Deshabilitalo en su lugar para conservar el historial.");
+        }
+        store.listAsignaciones().stream().filter(a -> id.equals(a.getInquilinoId()))
+                .forEach(a -> store.deleteAsignacion(a.getId()));
+        store.listServiciosInquilinos().stream().filter(s -> id.equals(s.getInquilinoId()))
+                .forEach(s -> store.deleteServicioInquilino(s.getId()));
         store.deleteInquilino(id);
     }
 
@@ -76,6 +91,30 @@ public class InquilinoController {
         }
         if (i.getPersonas() < 0) {
             i.setPersonas(0);
+        }
+        i.setNombre(i.getNombre().trim());
+        if (i.getAlquilerBs() == null || i.getAlquilerBs().signum() < 0) {
+            i.setAlquilerBs(java.math.BigDecimal.ZERO);
+        }
+        i.setAlquilerBs(i.getAlquilerBs().setScale(2, java.math.RoundingMode.HALF_UP));
+        java.time.LocalDate ingreso = fecha(i.getFechaIngreso(), "ingreso");
+        java.time.LocalDate salida = fecha(i.getFechaSalida(), "salida");
+        if (ingreso != null && salida != null && salida.isBefore(ingreso)) {
+            throw new IllegalArgumentException("La fecha de salida no puede ser anterior a la de ingreso");
+        }
+        if (i.getFechaSalida() != null && i.getFechaSalida().isBlank()) {
+            i.setFechaSalida(null);
+        }
+    }
+
+    private static java.time.LocalDate fecha(String s, String nombre) {
+        if (s == null || s.isBlank()) {
+            return null;
+        }
+        try {
+            return java.time.LocalDate.parse(s.trim());
+        } catch (java.time.format.DateTimeParseException e) {
+            throw new IllegalArgumentException("La fecha de " + nombre + " es invalida (yyyy-MM-dd)");
         }
     }
 }

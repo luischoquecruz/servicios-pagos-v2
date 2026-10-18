@@ -86,27 +86,32 @@ public class GoogleSheetsStore implements CasaStore {
     @Override
     public void reload() {
         try {
-            JsonNode resp = script.get("action=snapshot");
-            JsonNode data = readData(resp);
-            synchronized (lock) {
-                inquilinos = readList(data, "inquilinos", Inquilino.class);
-                servicios = readList(data, "servicios", Servicio.class);
-                 serviciosInquilinos = readList(data, "servicios_inquilinos", ServicioInquilino.class);
-                cobros = readList(data, "cobros", Cobro.class);
-                pagos = readList(data, "pagos", Pago.class);
-                asignaciones = readList(data, "asignaciones", Asignacion.class);
-                syncedAt = Instant.now().toString();
-                version++;
-                connected = true;
-                lastError = null;
-             }
-             log.info("Google Sheets sincronizado: {} inquilinos, {} servicios, {} cobros, {} pagos, {} asignaciones",
-                     inquilinos.size(), servicios.size(), cobros.size(), pagos.size(), asignaciones.size());
+            recargar();
         } catch (Exception e) {
             connected = false;
             lastError = e.getMessage();
             log.warn("Fallo la sincronizacion con Google Sheets", e);
         }
+    }
+
+    /** Recarga y propaga el error (se usa tras escribir, para no trabajar con datos viejos). */
+    private void recargar() throws Exception {
+        JsonNode resp = script.get("action=snapshot");
+        JsonNode data = readData(resp);
+        synchronized (lock) {
+            inquilinos = readList(data, "inquilinos", Inquilino.class);
+            servicios = readList(data, "servicios", Servicio.class);
+            serviciosInquilinos = readList(data, "servicios_inquilinos", ServicioInquilino.class);
+            cobros = readList(data, "cobros", Cobro.class);
+            pagos = readList(data, "pagos", Pago.class);
+            asignaciones = readList(data, "asignaciones", Asignacion.class);
+            syncedAt = Instant.now().toString();
+            version++;
+            connected = true;
+            lastError = null;
+        }
+        log.info("Google Sheets sincronizado: {} inquilinos, {} servicios, {} cobros, {} pagos, {} asignaciones",
+                inquilinos.size(), servicios.size(), cobros.size(), pagos.size(), asignaciones.size());
     }
 
     // -------------------- Inquilinos --------------------
@@ -197,7 +202,23 @@ public class GoogleSheetsStore implements CasaStore {
                     "periodo", periodo,
                     "rows", rows == null ? List.of() : rows));
             ok(resp);
-            reload();
+            recargar();
+        } catch (Exception e) {
+            throw new RuntimeException("Fallo al guardar cobros: " + e.getMessage(), e);
+        }
+    }
+
+    /** Reemplaza las lineas de un servicio del mes directamente en la hoja (sin usar la cache). */
+    @Override
+    public void replaceCobrosServicio(String periodo, String servicioId, List<Cobro> rows) {
+        try {
+            JsonNode resp = script.post(Map.of(
+                    "action", "replaceCobrosServicio",
+                    "periodo", periodo,
+                    "servicioId", servicioId,
+                    "rows", rows == null ? List.of() : rows));
+            ok(resp);
+            recargar();
         } catch (Exception e) {
             throw new RuntimeException("Fallo al guardar cobros: " + e.getMessage(), e);
         }
@@ -239,7 +260,7 @@ public class GoogleSheetsStore implements CasaStore {
             }
             JsonNode resp = script.post(body);
             ok(resp);
-            reload();
+            recargar();
         } catch (Exception e) {
             throw new RuntimeException("Fallo la escritura '" + op + "' en " + sheet + ": " + e.getMessage(), e);
         }

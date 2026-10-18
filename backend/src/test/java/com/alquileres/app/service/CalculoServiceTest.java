@@ -270,6 +270,80 @@ class CalculoServiceTest {
         assertThat(deAna.getMontoTotal()).isEqualByComparingTo("25.00");
     }
 
+    @Test
+    void generarServicioNoDuplicaCobrosDeOtrosMeses() {
+        store.setInquilinos(List.of(inq("inq-a", "Ana", true, 1, 1), inq("inq-b", "Beto", true, 1, 1)));
+        store.setServicios(List.of(new Servicio("svc-luz", "Luz", "kWh", Servicio.METODO_CUARTOS, List.of())));
+        store.setAsignaciones(List.of(
+                asig("2026-07", "inq-a", "svc-luz", true), asig("2026-07", "inq-b", "svc-luz", true),
+                asig("2026-08", "inq-a", "svc-luz", true), asig("2026-08", "inq-b", "svc-luz", true)));
+        store.setPagos(List.of(factura("f-7", "svc-luz", "2026-07", "50"), factura("f-8", "svc-luz", "2026-08", "100")));
+
+        service.generarPeriodo("2026-07");
+        service.generarServicio("2026-08", "svc-luz");
+        service.generarServicio("2026-08", "svc-luz");
+        service.editarServicio("2026-08", "svc-luz", Map.of("inq-a", 1, "inq-b", 3));
+
+        assertThat(store.listCobros().stream().filter(c -> "2026-07".equals(c.getPeriodo()))).hasSize(2);
+        assertThat(store.listCobros().stream().filter(c -> "2026-08".equals(c.getPeriodo()))).hasSize(2);
+    }
+
+    @Test
+    void generaAlquilerMensualSoloParaQuienLoTieneHabilitado() {
+        Inquilino ana = inq("inq-a", "Ana", true, 2, 1);
+        ana.setCobraAlquiler(true);
+        ana.setAlquilerBs(new BigDecimal("450"));
+        Inquilino beto = inq("inq-b", "Beto", true, 1, 1);
+        store.setInquilinos(List.of(ana, beto));
+
+        List<Cobro> cobros = service.calcularPeriodo("2026-08");
+
+        assertThat(cobros).hasSize(1);
+        assertThat(cobros.get(0).getServicioId()).isEqualTo(Pagos.ALQUILER_ID);
+        assertThat(cobros.get(0).getMontoTotal()).isEqualByComparingTo("450.00");
+        assertThat(service.calcularServicio("2026-08", "svc-x")).isEmpty();
+    }
+
+    @Test
+    void pagoDeOtroServicioNoBloqueaElReajuste() {
+        store.setInquilinos(List.of(inq("inq-a", "Ana", true, 1, 1), inq("inq-b", "Beto", true, 1, 1)));
+        store.setServicios(List.of(new Servicio("svc-luz", "Luz", "kWh", Servicio.METODO_CUARTOS, List.of())));
+        store.setAsignaciones(List.of(asig("2026-08", "inq-a", "svc-luz", true), asig("2026-08", "inq-b", "svc-luz", true)));
+        store.setPagos(List.of(factura("f-l", "svc-luz", "2026-08", "100")));
+        service.generarPeriodo("2026-08");
+        store.upsertPago(new Pago("pg-1", "inq-a", "svc-agua", "2026-08", "2026-08-20", new BigDecimal("10"), ""));
+
+        List<Cobro> filas = service.editarServicio("2026-08", "svc-luz", Map.of("inq-a", 3, "inq-b", 1));
+
+        assertThat(cobroDe(filas, "inq-a").getMontoTotal()).isEqualByComparingTo("75.00");
+    }
+
+    @Test
+    void cambiarLaFacturaReajustaLosCobrosConLosMismosPesos() {
+        store.setInquilinos(List.of(inq("inq-a", "Ana", true, 1, 1), inq("inq-b", "Beto", true, 3, 1)));
+        store.setServicios(List.of(new Servicio("svc-luz", "Luz", "kWh", Servicio.METODO_CUARTOS, List.of())));
+        store.setAsignaciones(List.of(asig("2026-08", "inq-a", "svc-luz", true), asig("2026-08", "inq-b", "svc-luz", true)));
+        store.setPagos(List.of(factura("f-l", "svc-luz", "2026-08", "100")));
+        service.generarPeriodo("2026-08");
+
+        store.setPagos(List.of(factura("f-l", "svc-luz", "2026-08", "200")));
+        service.sincronizarFactura("svc-luz", "2026-08");
+        assertThat(cobroDe(store.listCobros(), "inq-a").getMontoTotal()).isEqualByComparingTo("50.00");
+        assertThat(cobroDe(store.listCobros(), "inq-b").getMontoTotal()).isEqualByComparingTo("150.00");
+
+        store.setPagos(List.of());
+        service.sincronizarFactura("svc-luz", "2026-08");
+        assertThat(store.listCobros()).isEmpty();
+    }
+
+    @Test
+    void noCobraAntesDeLaFechaDeIngreso() {
+        Inquilino futuro = inq("inq-f", "Futuro", true, 1, 1);
+        futuro.setFechaIngreso("2026-09-10");
+        assertThat(CalculoService.activoEn(futuro, CalculoService.parse("2026-08"))).isFalse();
+        assertThat(CalculoService.activoEn(futuro, CalculoService.parse("2026-09"))).isTrue();
+    }
+
     private static BigDecimal sumaMontos(List<Cobro> cobros) {
         return cobros.stream().map(Cobro::getMontoTotal).reduce(BigDecimal.ZERO, BigDecimal::add);
     }
@@ -357,7 +431,10 @@ class CalculoServiceTest {
             cobros.addAll(cobrosNuevos);
         }
         @Override public List<Pago> listPagos() { return pagos; }
-        @Override public void upsertPago(Pago pago) { pagos.add(pago); }
+        @Override public void upsertPago(Pago pago) {
+            pagos.removeIf(p -> p.getId().equals(pago.getId()));
+            pagos.add(pago);
+        }
         @Override public void deletePago(String id) { pagos.removeIf(p -> p.getId().equals(id)); }
         @Override public Snapshot snapshot() {
             return new Snapshot(inquilinos, servicios, sus, cobros, pagos, asig, "now", 0, "test");

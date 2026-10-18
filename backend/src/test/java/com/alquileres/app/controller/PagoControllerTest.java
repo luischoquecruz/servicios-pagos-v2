@@ -17,6 +17,7 @@ import com.alquileres.app.model.Pago;
 import com.alquileres.app.model.Servicio;
 import com.alquileres.app.model.ServicioInquilino;
 import com.alquileres.app.model.Snapshot;
+import com.alquileres.app.service.CalculoService;
 import com.alquileres.app.store.CasaStore;
 
 class PagoControllerTest {
@@ -27,7 +28,7 @@ class PagoControllerTest {
     @BeforeEach
     void setUp() {
         store = new StoreStub();
-        controller = new PagoController(store);
+        controller = new PagoController(store, new CalculoService(store));
     }
 
     @Test
@@ -98,6 +99,40 @@ class PagoControllerTest {
         assertThat(store.pagos).hasSize(1);
     }
 
+    @Test
+    void rechazaEditarFacturaHaciaServicioMesConFactura() {
+        store.upsertPago(factura("pg-1"));
+        Pago otra = factura("pg-2");
+        otra.setPeriodo("2026-05");
+        store.upsertPago(otra);
+
+        Pago edicion = factura("pg-2");
+
+        assertThatThrownBy(() -> controller.registrar(edicion))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Ya existe una factura");
+    }
+
+    @Test
+    void periodoVacioSeCompletaAntesDeValidarDuplicados() {
+        Pago p = factura(null);
+        p.setPeriodo(null);
+
+        Pago guardado = controller.registrar(p);
+
+        assertThat(guardado.getPeriodo()).matches("\\d{4}-\\d{2}");
+    }
+
+    @Test
+    void rechazaPagoDeInquilinoInexistente() {
+        Pago p = factura(null);
+        p.setInquilinoId("inq-x");
+
+        assertThatThrownBy(() -> controller.registrar(p))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("inquilino");
+    }
+
     private static Pago factura(String id) {
         Pago p = new Pago();
         p.setId(id);
@@ -116,7 +151,7 @@ class PagoControllerTest {
         @Override public List<Inquilino> listInquilinos() { return List.of(); }
         @Override public void upsertInquilino(Inquilino v) { }
         @Override public void deleteInquilino(String id) { }
-        @Override public List<Servicio> listServicios() { return List.of(); }
+        @Override public List<Servicio> listServicios() { return List.of(new Servicio("svc-1", "Luz", "kWh", Servicio.METODO_CUARTOS, List.of())); }
         @Override public void upsertServicio(Servicio v) { }
         @Override public void deleteServicio(String id) { }
         @Override public List<ServicioInquilino> listServiciosInquilinos() { return List.of(); }

@@ -5,17 +5,23 @@ import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 /**
- * Habilita CORS para el frontend. Acepta cualquier origen para que la app
- * funcione tanto en desarrollo local como desplegada (Vercel, etc.).
+ * CORS para el frontend: solo los origenes de app.security.cors-origins
+ * (por defecto el servidor de desarrollo de Vite).
  */
 @Configuration
 public class WebConfig implements WebMvcConfigurer {
 
+    private final SeguridadProperties seguridad;
+
+    public WebConfig(SeguridadProperties seguridad) {
+        this.seguridad = seguridad;
+    }
+
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/api/**")
-                .allowedOriginPatterns("*")
+                .allowedOriginPatterns(seguridad.getCorsOrigins().toArray(String[]::new))
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-                .allowedHeaders("*");
+                .allowedHeaders("Content-Type", "X-Api-Key");
     }
 }

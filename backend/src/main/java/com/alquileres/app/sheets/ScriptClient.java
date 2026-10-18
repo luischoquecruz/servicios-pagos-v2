@@ -5,7 +5,10 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.Map;
 
 import org.slf4j.Logger;
@@ -53,20 +56,27 @@ public class ScriptClient {
         return executeRequest("GET", baseUrl(), null, params);
     }
 
+    private String claveParam() {
+        String k = props.getScriptKey() == null ? "" : props.getScriptKey();
+        return "key=" + URLEncoder.encode(k, StandardCharsets.UTF_8);
+    }
+
     /**
      * POST con JSON al script (escribe en las hojas).
      * Google ejecuta doPost en el primer request y responde un 302; el redirect
      * se sigue como GET (igual que un navegador).
      */
     public JsonNode post(Map<String, Object> payload) throws IOException, InterruptedException {
-        return executeRequest("POST", baseUrl(), payload, (String[]) null);
+        Map<String, Object> cuerpo = new HashMap<>(payload);
+        cuerpo.put("key", props.getScriptKey());
+        return executeRequest("POST", baseUrl(), cuerpo, (String[]) null);
     }
 
     private JsonNode executeRequest(String method, String startUrl, Map<String, Object> payload,
             String[] params) throws IOException, InterruptedException {
-        String url = startUrl;
+        String url = startUrl + "?" + claveParam();
         if (params != null && params.length > 0) {
-            url = url + "?" + String.join("&", params);
+            url = url + "&" + String.join("&", params);
         }
 
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url));

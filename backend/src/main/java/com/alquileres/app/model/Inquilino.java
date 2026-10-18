@@ -1,5 +1,7 @@
 package com.alquileres.app.model;
 
+import java.math.BigDecimal;
+
 /**
  * Inquilino de la casa.
  * Vive por un tiempo determinado: estado habilitado/deshabilitado,
@@ -15,6 +17,8 @@ public class Inquilino {
     private boolean habilitado;
     private int habitaciones;      // cantidad de habitaciones alquiladas
     private int personas;          // cantidad de personas que las habitan
+    private boolean cobraAlquiler; // true si se le cobra alquiler mensual
+    private BigDecimal alquilerBs; // monto de alquiler mensual (por inquilino)
 
     public Inquilino() {
     }
@@ -29,6 +33,22 @@ public class Inquilino {
         this.habilitado = habilitado;
         this.habitaciones = habitaciones;
         this.personas = personas;
+    }
+
+    public boolean isCobraAlquiler() {
+        return cobraAlquiler;
+    }
+
+    public void setCobraAlquiler(boolean cobraAlquiler) {
+        this.cobraAlquiler = cobraAlquiler;
+    }
+
+    public BigDecimal getAlquilerBs() {
+        return alquilerBs;
+    }
+
+    public void setAlquilerBs(BigDecimal alquilerBs) {
+        this.alquilerBs = alquilerBs;
     }
 
     public String getId() {

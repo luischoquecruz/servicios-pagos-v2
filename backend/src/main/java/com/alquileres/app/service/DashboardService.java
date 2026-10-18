@@ -1,7 +1,6 @@
 package com.alquileres.app.service;
 
 import java.math.BigDecimal;
-import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
 import java.util.Comparator;
 import java.util.List;
@@ -27,7 +26,7 @@ public class DashboardService {
     }
 
     public Resumen resumen() {
-        String periodo = YearMonth.now().toString();
+        String periodo = Fechas.mesActual().toString();
         var snap = store.snapshot();
         var mensual = reportes.mensual(periodo);
         var general = reportes.general();

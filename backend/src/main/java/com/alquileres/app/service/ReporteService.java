@@ -38,9 +38,10 @@ public class ReporteService {
         Snapshot snap = store.snapshot();
 
         Map<String, String> nombreInq = snap.getInquilinos().stream()
-                .collect(Collectors.toMap(Inquilino::getId, Inquilino::getNombre, (a, b) -> a));
+                .collect(Collectors.toMap(Inquilino::getId, i -> i.getNombre() == null ? i.getId() : i.getNombre(), (a, b) -> a, java.util.HashMap::new));
         Map<String, String> nombreSvc = snap.getServicios().stream()
-                .collect(Collectors.toMap(Servicio::getId, Servicio::getNombre, (a, b) -> a));
+                .collect(Collectors.toMap(Servicio::getId, s -> s.getNombre() == null ? s.getId() : s.getNombre(), (a, b) -> a, java.util.HashMap::new));
+        nombreSvc.putIfAbsent(Pagos.ALQUILER_ID, "Alquiler");
 
         List<Cobro> cobros = snap.getCobros().stream()
                 .filter(c -> p.prefix().equals(c.getPeriodo()))
@@ -62,7 +63,7 @@ public class ReporteService {
                      c.getPeso(), c.getPesoTotal(),
                      c.getMontoBase(), c.getMontoExtra(), c.getMontoTotal(),
                      pagadoDe(pagosPeriodo, c.getInquilinoId(), c.getServicioId()),
-                     c.getMontoTotal().subtract(pagadoDe(pagosPeriodo, c.getInquilinoId(), c.getServicioId())),
+                     nz(c.getMontoTotal()).subtract(pagadoDe(pagosPeriodo, c.getInquilinoId(), c.getServicioId())),
                      c.getHabitaciones(), c.getPersonas(),
                      extras));
         }
@@ -72,9 +73,9 @@ public class ReporteService {
         Map<String, String> nombresInq = new LinkedHashMap<>();
         for (FilaDetalle f : detalle) {
             BigDecimal[] t = porInq.computeIfAbsent(f.inquilinoId(), k -> new BigDecimal[]{CERO, CERO});
-            t[0] = t[0].add(f.montoTotal);
+            t[0] = t[0].add(nz(f.montoTotal));
         }
-        pagosPeriodo.stream().filter(pg -> pg.getInquilinoId() != null).forEach(pg -> {
+        pagosPeriodo.stream().filter(Pagos::esAbono).forEach(pg -> {
             BigDecimal[] t = porInq.computeIfAbsent(pg.getInquilinoId(), k -> new BigDecimal[]{CERO, CERO});
             t[1] = t[1].add(nz(pg.getMontoBs()));
             nombresInq.computeIfAbsent(pg.getInquilinoId(), k -> nombreInq.getOrDefault(k, k));
@@ -91,7 +92,7 @@ public class ReporteService {
         Map<String, BigDecimal[]> porSvcMap = new LinkedHashMap<>();
         for (FilaDetalle f : detalle) {
             BigDecimal[] t = porSvcMap.computeIfAbsent(f.servicioId(), k -> new BigDecimal[]{CERO, CERO, CERO});
-            t[0] = t[0].add(f.montoTotal);
+            t[0] = t[0].add(nz(f.montoTotal));
             t[1] = t[1].add(f.pagado);
             t[2] = t[2].add(BigDecimal.ONE);
         }
@@ -101,10 +102,10 @@ public class ReporteService {
                 t[2].intValue())));
         porServicio.sort(Comparator.comparing(TotalServicio::cobrado).reversed());
 
-        BigDecimal totalCobrado = cobros.stream().map(Cobro::getMontoTotal)
+        BigDecimal totalCobrado = cobros.stream().map(c -> nz(c.getMontoTotal()))
                 .reduce(CERO, BigDecimal::add);
         BigDecimal totalPagado = pagosPeriodo.stream()
-                .filter(pg -> pg.getInquilinoId() != null)
+                .filter(Pagos::esAbono)
                 .map(pg -> nz(pg.getMontoBs()))
                 .reduce(CERO, BigDecimal::add);
 
@@ -117,9 +118,10 @@ public class ReporteService {
         Snapshot snap = store.snapshot();
 
         Map<String, String> nombreInq = snap.getInquilinos().stream()
-                .collect(Collectors.toMap(Inquilino::getId, Inquilino::getNombre, (a, b) -> a));
+                .collect(Collectors.toMap(Inquilino::getId, i -> i.getNombre() == null ? i.getId() : i.getNombre(), (a, b) -> a, java.util.HashMap::new));
         Map<String, String> nombreSvc = snap.getServicios().stream()
-                .collect(Collectors.toMap(Servicio::getId, Servicio::getNombre, (a, b) -> a));
+                .collect(Collectors.toMap(Servicio::getId, s -> s.getNombre() == null ? s.getId() : s.getNombre(), (a, b) -> a, java.util.HashMap::new));
+        nombreSvc.putIfAbsent(Pagos.ALQUILER_ID, "Alquiler");
 
         List<Cobro> cobros = snap.getCobros();
         List<Pago> pagos = snap.getPagos();
@@ -128,9 +130,9 @@ public class ReporteService {
         Map<String, BigDecimal[]> porInq = new LinkedHashMap<>();
         cobros.forEach(c -> {
             BigDecimal[] t = porInq.computeIfAbsent(c.getInquilinoId(), k -> new BigDecimal[]{CERO, CERO});
-            t[0] = t[0].add(c.getMontoTotal());
+            t[0] = t[0].add(nz(c.getMontoTotal()));
         });
-        pagos.stream().filter(pg -> pg.getInquilinoId() != null).forEach(pg -> {
+        pagos.stream().filter(Pagos::esAbono).forEach(pg -> {
             BigDecimal[] t = porInq.computeIfAbsent(pg.getInquilinoId(), k -> new BigDecimal[]{CERO, CERO});
             t[1] = t[1].add(nz(pg.getMontoBs()));
         });
@@ -143,12 +145,12 @@ public class ReporteService {
         Map<String, BigDecimal[]> porSvcMap = new LinkedHashMap<>();
         cobros.forEach(c -> {
             BigDecimal[] t = porSvcMap.computeIfAbsent(c.getServicioId(), k -> new BigDecimal[]{CERO, CERO, CERO});
-            t[0] = t[0].add(c.getMontoTotal());
+            t[0] = t[0].add(nz(c.getMontoTotal()));
             t[2] = t[2].add(BigDecimal.ONE);
         });
         pagos.stream()
                 .filter(pg -> pg.getServicioId() != null)
-                .filter(pg -> pg.getInquilinoId() != null)
+                .filter(Pagos::esAbono)
                 .forEach(pg -> {
             BigDecimal[] t = porSvcMap.computeIfAbsent(pg.getServicioId(), k -> new BigDecimal[]{CERO, CERO, CERO});
             t[1] = t[1].add(nz(pg.getMontoBs()));
@@ -163,10 +165,10 @@ public class ReporteService {
         Map<String, BigDecimal[]> porPeriodoMap = new LinkedHashMap<>();
         cobros.forEach(c -> {
             BigDecimal[] t = porPeriodoMap.computeIfAbsent(c.getPeriodo(), k -> new BigDecimal[]{CERO, CERO});
-            t[0] = t[0].add(c.getMontoTotal());
+            t[0] = t[0].add(nz(c.getMontoTotal()));
         });
         pagos.forEach(pg -> {
-            if (pg.getPeriodo() != null && pg.getInquilinoId() != null) {
+            if (pg.getPeriodo() != null && Pagos.esAbono(pg)) {
                 BigDecimal[] t = porPeriodoMap.computeIfAbsent(pg.getPeriodo(), k -> new BigDecimal[]{CERO, CERO});
                 t[1] = t[1].add(nz(pg.getMontoBs()));
             }
@@ -177,7 +179,7 @@ public class ReporteService {
         porPeriodo.sort(Comparator.comparing(TotalPeriodo::periodo));
 
         BigDecimal totalCobrado = cobros.stream().map(c -> nz(c.getMontoTotal())).reduce(CERO, BigDecimal::add);
-        BigDecimal totalPagado = pagos.stream().filter(pg -> pg.getInquilinoId() != null)
+        BigDecimal totalPagado = pagos.stream().filter(Pagos::esAbono)
                 .map(pg -> nz(pg.getMontoBs())).reduce(CERO, BigDecimal::add);
 
         return new ReporteGeneral(red(totalCobrado), red(totalPagado), red(totalCobrado.subtract(totalPagado)),
@@ -186,7 +188,7 @@ public class ReporteService {
 
     private BigDecimal pagadoDe(List<Pago> pagos, String inquilinoId, String servicioId) {
         return pagos.stream()
-                .filter(pg -> pg.getInquilinoId() != null)
+                .filter(Pagos::esAbono)
                 .filter(pg -> inquilinoId.equals(pg.getInquilinoId()))
                 .filter(pg -> servicioId.equals(pg.getServicioId()))
                 .map(pg -> nz(pg.getMontoBs()))
