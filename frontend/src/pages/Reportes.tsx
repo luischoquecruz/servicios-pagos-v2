@@ -6,38 +6,45 @@ import { descargarCSV, fmtBs, mesActual, ALQUILER_ID } from '../utils';
 import { Cargando } from '../components/ui/Cargando';
 import { Boton } from '../components/ui/Boton';
 import { Aviso } from '../components/ui/Aviso';
+import { irA } from '../nav';
+import { ResumenMesPag } from '../reportes/ResumenMes';
+import { EstadoCuentaPag } from '../reportes/EstadoCuenta';
+import { HistorialPag } from '../reportes/Historial';
 
-type Pestaña = 'mensual' | 'general';
+type Pestaña = 'mes' | 'cuenta' | 'anual' | 'detalle' | 'gestion';
 
-export function Reportes() {
-  const [pestaña, setPestaña] = useState<Pestaña>('mensual');
+const PESTANAS: { id: Pestaña; texto: string }[] = [
+  { id: 'mes', texto: 'Resumen del mes' },
+  { id: 'cuenta', texto: 'Estado de cuenta' },
+  { id: 'anual', texto: 'Historial anual' },
+  { id: 'detalle', texto: 'Detalle del mes' },
+  { id: 'gestion', texto: 'Por inquilino' },
+];
+
+export function Reportes({ params }: { params: URLSearchParams }) {
+  const pestaña = (PESTANAS.find((p) => p.id === params.get('tab'))?.id ?? 'mes') as Pestaña;
   const [periodo, setPeriodo] = useState(mesActual());
 
   return (
     <div className="page">
-      <div className="page-head">
+      <div className="page-head no-imprimir">
         <h2>Reportes</h2>
-        <div className="pestanas" role="tablist">
-          <button
-            className={`tab ${pestaña === 'mensual' ? 'tab-activa' : ''}`}
-            onClick={() => setPestaña('mensual')}
-          >
-            Mensual
+      </div>
+      <div className="chips no-imprimir" role="tablist" style={{ marginBottom: 18 }}>
+        {PESTANAS.map((p) => (
+          <button key={p.id} role="tab" aria-selected={pestaña === p.id}
+            className={`chip ${pestaña === p.id ? 'activo' : ''}`}
+            onClick={() => irA('reportes', { tab: p.id })}>
+            {p.texto}
           </button>
-          <button
-            className={`tab ${pestaña === 'general' ? 'tab-activa' : ''}`}
-            onClick={() => setPestaña('general')}
-          >
-            General
-          </button>
-        </div>
+        ))}
       </div>
 
-      {pestaña === 'mensual' ? (
-        <ReporteMensualPag periodo={periodo} onPeriodo={setPeriodo} />
-      ) : (
-        <ReporteGeneralPag />
-      )}
+      {pestaña === 'mes' && <ResumenMesPag />}
+      {pestaña === 'cuenta' && <EstadoCuentaPag inquilinoId={params.get('inq')} />}
+      {pestaña === 'anual' && <HistorialPag />}
+      {pestaña === 'detalle' && <ReporteMensualPag periodo={periodo} onPeriodo={setPeriodo} />}
+      {pestaña === 'gestion' && <ReporteGeneralPag />}
     </div>
   );
 }
