@@ -1,6 +1,8 @@
 import { useState, useMemo } from 'react';
 import { useSnapshot } from '../components/SnapshotContext';
-import { guardarAsignacion, eliminarAsignacion } from '../api';
+import { guardarAsignacion, eliminarAsignacion, copiarAsignaciones } from '../api';
+import { MODO_SCRIPT } from '../modo';
+import { activoEn, mesLargo, periodoAnterior } from '../reportes/modelo';
 import type { Asignacion } from '../types';
 import { mesActual } from '../utils';
 import { Aviso } from '../components/ui/Aviso';
@@ -86,6 +88,37 @@ export function Asignaciones() {
     }
   };
 
+  // Copiar del mes anterior: lo que falta en este mes, para inquilinos activos.
+  const anterior = periodoAnterior(periodo);
+  const porCopiar = useMemo(() => {
+    const inqs = new Map((snap?.inquilinos ?? []).map((i) => [i.id, i]));
+    return (snap?.asignaciones ?? []).filter((a) => a.periodo === anterior && a.activo
+      && !mapa.has(clave(a.inquilinoId, a.servicioId))
+      && inqs.has(a.inquilinoId) && activoEn(inqs.get(a.inquilinoId)!, periodo));
+  }, [snap?.asignaciones, snap?.inquilinos, anterior, mapa, periodo]);
+
+  const copiar = async () => {
+    setGuardando('copiar');
+    setAviso(null);
+    try {
+      let n = 0;
+      if (MODO_SCRIPT) {
+        n = (await copiarAsignaciones(anterior, periodo)).copiadas;
+      } else {
+        for (const a of porCopiar) {
+          await guardarAsignacion({ ...a, id: `${periodo}-${a.inquilinoId}-${a.servicioId}`, periodo });
+          n++;
+        }
+      }
+      recargar();
+      setAviso({ mensaje: `Se copiaron ${n} asignaciones de ${mesLargo(anterior)}`, tipo: 'ok' });
+    } catch (e) {
+      setAviso({ mensaje: e instanceof Error ? e.message : String(e), tipo: 'error' });
+    } finally {
+      setGuardando(null);
+    }
+  };
+
   const saveExtras = async (inqId: string, svcId: string) => {
     const key = clave(inqId, svcId);
     const existente = mapa.get(key);
@@ -120,6 +153,11 @@ export function Asignaciones() {
           <span className="campo-label">Periodo</span>
           <input className="input" type="month" value={periodo} onChange={(e) => setPeriodo(e.target.value)} />
         </label>
+        {porCopiar.length > 0 && (
+          <button className="btn btn-secundario" onClick={copiar} disabled={guardando !== null}>
+            {guardando === 'copiar' ? 'Copiando…' : `Copiar ${porCopiar.length} de ${mesLargo(anterior)}`}
+          </button>
+        )}
       </div>
 
       {servicios.length === 0 && (
