@@ -218,10 +218,12 @@ export function explicarCobro(c: Cobro, snap: Snapshot, mapSvc: Map<string, Serv
   const peso = toNum(c.peso);
   const total = toNum(c.pesoTotal);
   const ajustado = peso !== base + nExtras;
+  const companeros = snap.cobros.filter((x) => x.periodo === c.periodo && x.servicioId === c.servicioId).length;
   const tuParte = ajustado ? `${peso} (ajustado a mano)` : `${peso} (${partes.join(' + ')})`;
   return (
-    `Factura de ${svc?.nombre ?? 'servicio'}: ${fmt(factura)}, repartida entre ${total} ` +
-    `${total === 1 ? 'parte' : 'partes'}. Te corresponden ${tuParte}: ${fmt(factura)} × ${peso}/${total}.`
+    `Factura de ${svc?.nombre ?? 'servicio'}: ${fmt(factura)}, repartida en ${total} ` +
+    `${total === 1 ? 'parte' : 'partes'} entre ${companeros} inquilino${companeros === 1 ? '' : 's'} ` +
+    `(cada parte ${fmt(total > 0 ? factura / total : 0)}). Te corresponden ${tuParte}: ${fmt(factura)} × ${peso}/${total}.`
   );
 }
 
@@ -410,4 +412,145 @@ export function tareasDelMes(snap: Snapshot, periodo: string): Tarea[] {
 function lista(xs: string[]): string {
   if (xs.length <= 1) return xs.join('');
   return xs.slice(0, -1).join(', ') + ' y ' + xs[xs.length - 1];
+}
+
+// ---------- reparto de cada servicio (seccion Cobros y reportes) ----------
+
+export interface LineaReparto {
+  inquilinoId: string;
+  nombre: string;
+  peso: number;
+  base: number;
+  extras: [string, number][];
+  monto: number;
+  /** el factor no coincide con cuartos/personas + extras guardados: se ajusto a mano */
+  ajustado: boolean;
+}
+
+export interface RepartoServicio {
+  servicioId: string;
+  nombre: string;
+  porPersonas: boolean;
+  factura: number | null;
+  pesoTotal: number;
+  valorParte: number;
+  repartido: number;
+  lineas: LineaReparto[];
+  /** explicacion de por que cambio el total de partes respecto al mes anterior */
+  cambios: { anteriorTotal: number; detalle: string[] } | null;
+  /** motivos por los que el reparto ya no coincide con las asignaciones actuales */
+  desactualizado: string[];
+}
+
+function baseDe(inq: { habitaciones: number; personas: number } | undefined, porPersonas: boolean): number {
+  if (!inq) return 0;
+  return toNum(porPersonas ? inq.personas : inq.habitaciones);
+}
+
+const sumaExtras = (e: Record<string, number> | undefined) =>
+  Object.values(e ?? {}).reduce((s, n) => s + Math.max(0, Math.floor(toNum(n))), 0);
+
+export function repartoServicios(snap: Snapshot, periodo: string): RepartoServicio[] {
+  const mapInq = new Map(snap.inquilinos.map((i) => [i.id, i]));
+  const anterior = periodoAnterior(periodo);
+  const out: RepartoServicio[] = [];
+  for (const s of snap.servicios) {
+    const porPersonas = String(s.metodoPago).toUpperCase() === 'PERSONAS';
+    const cobros = snap.cobros.filter((c) => c.periodo === periodo && c.servicioId === s.id);
+    const facturas = snap.pagos.filter((p) => esFactura(p) && p.periodo === periodo && p.servicioId === s.id);
+    const asig = snap.asignaciones.filter((a) => a.periodo === periodo && a.servicioId === s.id && a.activo);
+    if (cobros.length === 0 && facturas.length === 0 && asig.length === 0) continue;
+
+    const factura = facturas.length ? r2(facturas.reduce((a, f) => a + toNum(f.montoBs), 0)) : null;
+    const lineas: LineaReparto[] = cobros
+      .map((c) => {
+        const base = porPersonas ? toNum(c.personas) : toNum(c.habitaciones);
+        const extras = Object.entries(c.extras ?? {}).filter(([, n]) => toNum(n) > 0).map(([k, n]) => [k, toNum(n)] as [string, number]);
+        const peso = toNum(c.peso);
+        return {
+          inquilinoId: c.inquilinoId,
+          nombre: mapInq.get(c.inquilinoId)?.nombre ?? c.inquilinoId,
+          peso,
+          base,
+          extras,
+          monto: r2(toNum(c.montoTotal)),
+          ajustado: peso !== base + extras.reduce((a, [, n]) => a + n, 0),
+        };
+      })
+      .sort((a, b) => b.peso - a.peso || a.nombre.localeCompare(b.nombre));
+    const pesoTotal = lineas.reduce((a, l) => a + l.peso, 0);
+    const repartido = r2(lineas.reduce((a, l) => a + l.monto, 0));
+
+    // Cambios frente al mes anterior
+    let cambios: RepartoServicio['cambios'] = null;
+    const prev = snap.cobros.filter((c) => c.periodo === anterior && c.servicioId === s.id);
+    const prevTotal = prev.reduce((a, c) => a + toNum(c.peso), 0);
+    if (prev.length && cobros.length && prevTotal !== pesoTotal) {
+      const detalle: string[] = [];
+      const ahora = new Map(lineas.map((l) => [l.inquilinoId, l.peso]));
+      for (const c of prev) {
+        const nombre = mapInq.get(c.inquilinoId)?.nombre ?? c.inquilinoId;
+        const p = toNum(c.peso);
+        if (!ahora.has(c.inquilinoId)) detalle.push(`${nombre} ya no participa (tenía ${p} ${p === 1 ? 'parte' : 'partes'})`);
+        else if (ahora.get(c.inquilinoId) !== p) detalle.push(`${nombre} pasó de ${p} a ${ahora.get(c.inquilinoId)} partes`);
+      }
+      for (const l of lineas) {
+        if (!prev.some((c) => c.inquilinoId === l.inquilinoId)) detalle.push(`${l.nombre} se suma con ${l.peso} ${l.peso === 1 ? 'parte' : 'partes'}`);
+      }
+      cambios = { anteriorTotal: prevTotal, detalle };
+    }
+
+    // ¿El reparto guardado sigue coincidiendo con las asignaciones de hoy?
+    const desactualizado: string[] = [];
+    if (cobros.length) {
+      const esperados = asig.filter((a) => {
+        const inq = mapInq.get(a.inquilinoId);
+        return inq && activoEn(inq, periodo) && baseDe(inq, porPersonas) + sumaExtras(a.extras) > 0;
+      });
+      for (const a of esperados) {
+        const l = lineas.find((x) => x.inquilinoId === a.inquilinoId);
+        const nombre = mapInq.get(a.inquilinoId)?.nombre ?? a.inquilinoId;
+        const esperado = baseDe(mapInq.get(a.inquilinoId), porPersonas) + sumaExtras(a.extras);
+        if (!l) desactualizado.push(`${nombre} está asignado pero no aparece en el reparto`);
+        else if (!l.ajustado && l.peso !== esperado) desactualizado.push(`${nombre}: el reparto usa ${l.peso} partes y hoy le corresponden ${esperado}`);
+      }
+      for (const l of lineas) {
+        if (!esperados.some((a) => a.inquilinoId === l.inquilinoId)) desactualizado.push(`${l.nombre} está en el reparto pero ya no tiene el servicio asignado`);
+      }
+      if (factura !== null && Math.abs(factura - repartido) > 0.01) desactualizado.push(`lo repartido (Bs ${repartido}) no suma la factura (Bs ${factura})`);
+    }
+
+    out.push({
+      servicioId: s.id,
+      nombre: s.nombre,
+      porPersonas,
+      factura,
+      pesoTotal,
+      valorParte: pesoTotal > 0 && factura ? factura / pesoTotal : 0,
+      repartido,
+      lineas,
+      cambios,
+      desactualizado,
+    });
+  }
+  return out;
+}
+
+/** Inquilinos que vivieron en la casa durante el mes pero no participan en ningun cobro. */
+export function fueraDelReparto(snap: Snapshot, periodo: string): { nombre: string; motivo: string }[] {
+  const [a, m] = periodo.split('-').map(Number);
+  const inicio = `${periodo}-01`;
+  const fin = `${periodo}-${String(new Date(a, m, 0).getDate()).padStart(2, '0')}`;
+  const conCobro = new Set(snap.cobros.filter((c) => c.periodo === periodo).map((c) => c.inquilinoId));
+  const out: { nombre: string; motivo: string }[] = [];
+  for (const i of snap.inquilinos) {
+    const ingreso = i.fechaIngreso?.slice(0, 10) ?? '';
+    const salida = i.fechaSalida?.slice(0, 10) ?? '';
+    const vivio = (!ingreso || ingreso <= fin) && (!salida || salida >= inicio);
+    if (!vivio || conCobro.has(i.id)) continue;
+    let motivo = 'no tiene servicios asignados este mes';
+    if (!i.habilitado) motivo = salida ? `está deshabilitado (salió el ${salida.split('-').reverse().join('/')})` : 'está deshabilitado';
+    out.push({ nombre: i.nombre, motivo });
+  }
+  return out;
 }

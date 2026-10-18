@@ -1149,3 +1149,149 @@ h1, h2, h3, h4 {
     width: 100%;
   }
 }
+
+/* ---------- reparto de servicios ---------- */
+
+.repartos {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+  align-items: start;
+}
+
+.repartos .seccion {
+  margin-bottom: 0;
+}
+
+.reparto-cab {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.reparto-cab h3 {
+  margin: 0 0 2px;
+  font-size: 17px;
+}
+
+.reparto-cab .muted {
+  font-size: 13px;
+}
+
+.reparto-factura {
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+}
+
+.reparto-factura strong {
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.reparto-formula {
+  background: var(--superficie-2);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.reparto-formula small {
+  display: block;
+  color: var(--texto-suave);
+  margin-top: 2px;
+}
+
+.reparto-lineas {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.reparto-linea {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.reparto-linea-cab {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.reparto-linea small {
+  font-size: 12.5px;
+}
+
+.reparto-total {
+  display: flex;
+  justify-content: space-between;
+  border-top: 1px solid var(--borde);
+  margin-top: 12px;
+  padding-top: 10px;
+  font-weight: 600;
+}
+
+.reparto-nota,
+.reparto-alerta {
+  margin-top: 12px;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.reparto-nota {
+  background: var(--info-claro);
+  color: var(--info-texto);
+}
+
+.reparto-alerta {
+  background: var(--aviso-claro);
+  color: var(--texto);
+}
+
+.reparto-alerta strong {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.reparto-alerta strong svg {
+  color: var(--aviso-texto);
+  width: 16px;
+  height: 16px;
+}
+
+.reparto-nota ul,
+.reparto-alerta ul {
+  margin: 6px 0 8px;
+  padding-left: 18px;
+}
+
+.mini-parte {
+  display: block;
+  color: var(--tenue);
+  font-size: 11.5px;
+  font-weight: 400;
+}
+
+details.tecnico summary {
+  cursor: pointer;
+  color: var(--texto-suave);
+  font-weight: 600;
+}
+
+@media (max-width: 420px) {
+  .repartos {
+    grid-template-columns: 1fr;
+  }
+}
+
+.titulo-seccion {
+  font-size: 16px;
+  margin: 4px 0 12px;
+}
