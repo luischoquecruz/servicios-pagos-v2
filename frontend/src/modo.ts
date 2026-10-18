@@ -4,7 +4,7 @@ export const API_URL = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
 export const MODO_SCRIPT = API_URL.includes('script.google.com');
 
 /**
- * Intervalo de polling. En modo script se espacia para cuidar las cuotas de
- * Apps Script (tiempo de ejecucion 90 min/dia); en local se mantiene 5s.
+ * Intervalo de polling. En modo script solo se consulta la VERSION de los datos
+ * (respuesta minima); los datos completos se piden unicamente cuando cambia.
  */
-export const POLL_MS = MODO_SCRIPT ? 15000 : 5000;
+export const POLL_MS = MODO_SCRIPT ? 6000 : 5000;

@@ -222,7 +222,7 @@ export function nombreMes(periodo: string): string {
   return `${nombres[parseInt(mes, 10) - 1] ?? mes} ${anio}`;
 }
 
-export const PALETA_SERVICIOS = ['#2563eb', '#7c3aed', '#db2777', '#ea580c', '#0369a1', '#9333ea', '#e11d48', '#65a30d', '#0d9488', '#ca8a04'];
+export const PALETA_SERVICIOS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'];
 
 /** Color estable por concepto (null = general, alquiler = acento fijo). */
 export function colorServicio(svcId: string | null): string {
