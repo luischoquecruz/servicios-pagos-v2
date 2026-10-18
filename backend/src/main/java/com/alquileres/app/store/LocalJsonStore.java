@@ -89,8 +89,10 @@ public class LocalJsonStore implements CasaStore {
                 log.warn("No se pudo leer el archivo local {}: {}", f.toAbsolutePath(), e.getMessage());
             }
         }
-        if (seedIfEmpty()) {
-            persist();
+        synchronized (lock) {
+            if (seedIfEmpty()) {
+                persist();
+            }
         }
     }
 

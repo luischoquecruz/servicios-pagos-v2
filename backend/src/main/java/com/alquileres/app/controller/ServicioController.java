@@ -46,8 +46,19 @@ public class ServicioController {
         return body;
     }
 
+    /** Elimina SOLO si el servicio no tiene cobros, facturas ni pagos. */
     @DeleteMapping("/{id}")
     public void eliminar(@PathVariable String id) {
+        long cobros = store.listCobros().stream().filter(c -> id.equals(c.getServicioId())).count();
+        long pagos = store.listPagos().stream().filter(p -> id.equals(p.getServicioId())).count();
+        if (cobros > 0 || pagos > 0) {
+            throw new IllegalStateException("No se puede eliminar: el servicio tiene " + cobros + " cobro(s) y "
+                    + pagos + " factura(s)/pago(s) registrados.");
+        }
+        store.listAsignaciones().stream().filter(a -> id.equals(a.getServicioId()))
+                .forEach(a -> store.deleteAsignacion(a.getId()));
+        store.listServiciosInquilinos().stream().filter(s -> id.equals(s.getServicioId()))
+                .forEach(s -> store.deleteServicioInquilino(s.getId()));
         store.deleteServicio(id);
     }
 
@@ -56,6 +67,9 @@ public class ServicioController {
             throw new IllegalArgumentException("El nombre del servicio es obligatorio");
         }
         String nombre = s.getNombre().trim();
+        if ("alquiler".equalsIgnoreCase(nombre)) {
+            throw new IllegalArgumentException("\"Alquiler\" es un concepto reservado del sistema");
+        }
         boolean duplicado = store.listServicios().stream()
                 .filter(x -> idExcluido == null || !idExcluido.equals(x.getId()))
                 .anyMatch(x -> nombre.equalsIgnoreCase(x.getNombre() == null ? null : x.getNombre().trim()));

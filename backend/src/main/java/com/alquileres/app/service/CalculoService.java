@@ -7,6 +7,7 @@ import java.time.YearMonth;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -23,13 +24,15 @@ import com.alquileres.app.model.Snapshot;
 import com.alquileres.app.store.CasaStore;
 
 /**
- * Motor de cobros.
- * Mes a mes, para cada servicio se reparte la factura del mes (el Pago sin
- * inquilino registrado para ese servicio y periodo) entre los inquilinos
- * suscritos, segun el metodo configurado en el servicio: por cantidad de
- * habitaciones (CUARTOS) o por cantidad de personas (PERSONAS).
- * Los extras por consumo definidos por inquilino se suman como UNIDADES al
- * factor de reparto. Ej.: 1 cuarto + 2 extras => factor 3.
+ * Motor de cobros (misma logica que scripts/Code.gs).
+ * Mes a mes, para cada servicio se reparte la factura del mes (pagos sin
+ * inquilino de ese servicio y periodo) entre los inquilinos asignados, segun
+ * el metodo del servicio: habitaciones (CUARTOS) o personas (PERSONAS).
+ * Cada extra suma +1 al factor de reparto. Ej.: 1 cuarto + 2 extras => factor 3.
+ * Ademas se genera el alquiler mensual de los inquilinos que lo tienen habilitado.
+ *
+ * Las operaciones que escriben se sincronizan sobre esta instancia; PagoController
+ * usa el mismo monitor para que validar y escribir sea atomico.
  */
 @Service
 public class CalculoService {
@@ -40,16 +43,12 @@ public class CalculoService {
         this.store = store;
     }
 
-    /**
-     * Calcula (sin guardar) las lineas de cobro de un periodo YYYY-MM.
-     */
+    /** Calcula (sin guardar) las lineas de cobro de un periodo YYYY-MM (servicios + alquiler). */
     public List<Cobro> calcularPeriodo(String periodo) {
         return calcularPara(periodo, null);
     }
 
-    /**
-     * Calcula (sin guardar) las lineas de cobro de UN servicio en el periodo.
-     */
+    /** Calcula (sin guardar) las lineas de cobro de UN servicio en el periodo. */
     public List<Cobro> calcularServicio(String periodo, String servicioId) {
         return calcularPara(periodo, servicioId);
     }
@@ -65,14 +64,13 @@ public class CalculoService {
 
         List<Asignacion> asig = snap.getAsignaciones().stream()
                 .filter(a -> p.prefix.equals(a.getPeriodo()))
-                .filter(a -> Boolean.TRUE.equals(a.isActivo()))
+                .filter(Asignacion::isActivo)
                 .filter(a -> inquilinos.containsKey(a.getInquilinoId()))
                 .filter(a -> servicios.containsKey(a.getServicioId()))
                 .filter(a -> activoEn(inquilinos.get(a.getInquilinoId()), p))
                 .toList();
 
         List<Cobro> resultado = new ArrayList<>();
-
         for (Servicio servicio : snap.getServicios()) {
             if (servicioFiltro != null && !servicioFiltro.equals(servicio.getId())) {
                 continue;
@@ -87,17 +85,38 @@ public class CalculoService {
             if (costo.signum() <= 0) {
                 continue;
             }
-            List<Cobro> filas = repartirServicio(servicio, delServicio, inquilinos, p, costo);
-            resultado.addAll(filas);
+            resultado.addAll(repartirServicio(servicio, delServicio, inquilinos, p, costo));
         }
-
+        // El alquiler solo se integra al regenerar TODO el periodo.
+        if (servicioFiltro == null) {
+            resultado.addAll(cobrosAlquiler(snap.getInquilinos(), p));
+        }
         return resultado;
     }
 
+    /** Alquiler mensual completo (sin prorrateo) para inquilinos activos con alquiler habilitado. */
+    private List<Cobro> cobrosAlquiler(List<Inquilino> inquilinos, Periodo p) {
+        List<Cobro> filas = new ArrayList<>();
+        for (Inquilino inq : inquilinos) {
+            if (!inq.isCobraAlquiler() || !activoEn(inq, p)) {
+                continue;
+            }
+            BigDecimal mensual = nz(inq.getAlquilerBs()).setScale(2, RoundingMode.HALF_UP);
+            if (mensual.signum() <= 0) {
+                continue;
+            }
+            int hab = inq.getHabitaciones() > 0 ? inq.getHabitaciones() : 1;
+            filas.add(new Cobro(idCobro(p.prefix, inq.getId(), Pagos.ALQUILER_ID), p.prefix, inq.getId(),
+                    Pagos.ALQUILER_ID, BigDecimal.valueOf(hab), BigDecimal.valueOf(hab),
+                    mensual, BigDecimal.ZERO, mensual, inq.getHabitaciones(), inq.getPersonas(), new HashMap<>()));
+        }
+        return filas;
+    }
+
     /** Suma de las facturas (pagos sin inquilino) del servicio para el periodo. */
-    private static BigDecimal facturas(List<Pago> pagos, String servicioId, String periodo) {
+    static BigDecimal facturas(List<Pago> pagos, String servicioId, String periodo) {
         return pagos.stream()
-                .filter(pg -> pg.getInquilinoId() == null || pg.getInquilinoId().isBlank())
+                .filter(Pagos::esFactura)
                 .filter(pg -> servicioId.equals(pg.getServicioId()))
                 .filter(pg -> periodo.equals(pg.getPeriodo()))
                 .map(pg -> nz(pg.getMontoBs()))
@@ -105,12 +124,10 @@ public class CalculoService {
     }
 
     private List<Cobro> repartirServicio(Servicio servicio, List<Asignacion> asig,
-                                         Map<String, Inquilino> inquilinos, Periodo p,
-                                         BigDecimal costo) {
-
+                                         Map<String, Inquilino> inquilinos, Periodo p, BigDecimal costo) {
         boolean porPersonas = Servicio.METODO_PERSONAS.equalsIgnoreCase(servicio.getMetodoPago());
-
-        List<Peso> pesos = new ArrayList<>();
+        List<Cobro> plantilla = new ArrayList<>();
+        Map<String, Integer> pesos = new LinkedHashMap<>();
         for (Asignacion a : asig) {
             Inquilino inq = inquilinos.get(a.getInquilinoId());
             int base = porPersonas ? inq.getPersonas() : inq.getHabitaciones();
@@ -118,181 +135,150 @@ public class CalculoService {
             if (unidades <= 0) {
                 continue;
             }
-            pesos.add(new Peso(a, unidades));
-        }
-        if (pesos.isEmpty()) {
-            return List.of();
-        }
-
-        int pesoTotal = pesos.stream().mapToInt(Peso::unidades).sum();
-
-        List<Cobro> filas = new ArrayList<>();
-        for (Peso peso : pesos) {
-            Asignacion a = peso.asignacion;
-            Inquilino inq = inquilinos.get(a.getInquilinoId());
-
-            BigDecimal base = costo.multiply(BigDecimal.valueOf(peso.unidades()))
-                    .divide(BigDecimal.valueOf(pesoTotal), 2, RoundingMode.HALF_UP);
-
-            BigDecimal extra = BigDecimal.ZERO;
-
-            filas.add(new Cobro(
-                    idCobro(p.prefix, inq.getId(), servicio.getId()),
-                    p.prefix,
-                    inq.getId(),
-                    servicio.getId(),
-                    BigDecimal.valueOf(peso.unidades()),
-                    BigDecimal.valueOf(pesoTotal),
-                    base,
-                    extra,
-                    base.add(extra).setScale(2, RoundingMode.HALF_UP),
-                    inq.getHabitaciones(),
-                    inq.getPersonas(),
+            pesos.put(inq.getId(), unidades);
+            plantilla.add(new Cobro(idCobro(p.prefix, inq.getId(), servicio.getId()), p.prefix, inq.getId(),
+                    servicio.getId(), null, null, null, null, null,
+                    inq.getHabitaciones(), inq.getPersonas(),
                     a.getExtras() != null ? new HashMap<>(a.getExtras()) : new HashMap<>()));
         }
+        if (plantilla.isEmpty()) {
+            return List.of();
+        }
+        return repartirConPesos(plantilla, pesos, costo);
+    }
 
-        BigDecimal sumaBase = filas.stream().map(Cobro::getMontoBase)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal diferencia = costo.subtract(sumaBase);
-        if (diferencia.compareTo(BigDecimal.ZERO) != 0) {
-            Peso mayor = pesos.get(0);
-            for (Peso p2 : pesos) {
-                if (p2.unidades() > mayor.unidades()) {
-                    mayor = p2;
-                }
+    /**
+     * Reparte el costo entre las lineas segun los pesos (inquilinoId -> peso).
+     * La diferencia por redondeo se asigna a la linea de mayor peso, asi la suma
+     * coincide exactamente con la factura.
+     */
+    static List<Cobro> repartirConPesos(List<Cobro> lineas, Map<String, Integer> pesos, BigDecimal costo) {
+        int pesoTotal = lineas.stream().mapToInt(c -> pesos.get(c.getInquilinoId())).sum();
+        List<Cobro> filas = new ArrayList<>();
+        Cobro mayor = null;
+        for (Cobro c : lineas) {
+            int peso = pesos.get(c.getInquilinoId());
+            BigDecimal base = costo.multiply(BigDecimal.valueOf(peso))
+                    .divide(BigDecimal.valueOf(pesoTotal), 2, RoundingMode.HALF_UP);
+            Cobro f = new Cobro(c.getId(), c.getPeriodo(), c.getInquilinoId(), c.getServicioId(),
+                    BigDecimal.valueOf(peso), BigDecimal.valueOf(pesoTotal), base, BigDecimal.ZERO, base,
+                    c.getHabitaciones(), c.getPersonas(),
+                    c.getExtras() != null ? new HashMap<>(c.getExtras()) : new HashMap<>());
+            filas.add(f);
+            if (mayor == null || peso > mayor.getPeso().intValue()) {
+                mayor = f;
             }
-            for (Cobro c : filas) {
-                if (c.getInquilinoId().equals(mayor.asignacion().getInquilinoId())
-                        && c.getServicioId().equals(servicio.getId())) {
-                    c.setMontoBase(c.getMontoBase().add(diferencia));
-                    c.setMontoTotal(c.getMontoBase().add(c.getMontoExtra()).setScale(2, RoundingMode.HALF_UP));
-                    break;
-                }
-            }
+        }
+        BigDecimal suma = filas.stream().map(Cobro::getMontoBase).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal diferencia = costo.setScale(2, RoundingMode.HALF_UP).subtract(suma);
+        if (mayor != null && diferencia.signum() != 0) {
+            mayor.setMontoBase(mayor.getMontoBase().add(diferencia));
+            mayor.setMontoTotal(mayor.getMontoBase());
         }
         return filas;
     }
 
-    /**
-     * Genera y guarda los cobros del periodo, reemplazando los existentes.
-     */
-    public List<Cobro> generarPeriodo(String periodo) {
-        parse(periodo);
-        List<Cobro> filas = calcularPeriodo(periodo);
-        store.replaceCobros(periodo, filas);
+    /** Genera y guarda los cobros del periodo, reemplazando los existentes de ese mes. */
+    public synchronized List<Cobro> generarPeriodo(String periodo) {
+        Periodo p = parse(periodo);
+        List<Cobro> filas = calcularPeriodo(p.prefix);
+        store.replaceCobros(p.prefix, filas);
         return filas;
     }
 
-    /**
-     * Genera y guarda SOLO los cobros de un servicio del periodo,
-     * conservando las lineas de los demas servicios de ese mes.
-     */
-    public List<Cobro> generarServicio(String periodo, String servicioId) {
-        parse(periodo);
+    /** Genera y guarda SOLO los cobros de un servicio del periodo (conserva los demas del mes). */
+    public synchronized List<Cobro> generarServicio(String periodo, String servicioId) {
+        Periodo p = parse(periodo);
         if (servicioId == null || servicioId.isBlank()) {
             throw new IllegalArgumentException("El servicio es obligatorio");
         }
-        List<Cobro> filas = calcularServicio(periodo, servicioId);
-        List<Cobro> restantes = new ArrayList<>(store.listCobros().stream()
-                .filter(c -> !(periodo.equals(c.getPeriodo()) && servicioId.equals(c.getServicioId())))
-                .toList());
-        restantes.addAll(filas);
-        store.replaceCobros(periodo, restantes);
+        List<Cobro> filas = calcularServicio(p.prefix, servicioId);
+        reemplazarServicio(p.prefix, servicioId, filas);
         return filas;
+    }
+
+    /** Reemplaza solo las lineas de un servicio dentro del periodo (el resto del mes queda intacto). */
+    private void reemplazarServicio(String periodo, String servicioId, List<Cobro> nuevas) {
+        store.replaceCobrosServicio(periodo, servicioId, nuevas);
     }
 
     /**
      * Reajusta el factor de reparto (peso) de un servicio ya generado en el periodo.
-     * Recalcula los montos repartiendo la factura con los nuevos pesos.
-     * Bloqueado si algun inquilino del servicio ya tiene abonos ese mes.
+     * Bloqueado solo si algun inquilino ya pago ESTE servicio en ese mes.
      */
-    public List<Cobro> editarServicio(String periodo, String servicioId, Map<String, Integer> pesos) {
-        parse(periodo);
+    public synchronized List<Cobro> editarServicio(String periodo, String servicioId, Map<String, Integer> pesos) {
+        Periodo p = parse(periodo);
         if (servicioId == null || servicioId.isBlank()) {
             throw new IllegalArgumentException("El servicio es obligatorio");
+        }
+        if (Pagos.ALQUILER_ID.equals(servicioId)) {
+            throw new IllegalArgumentException("El alquiler no se reparte por pesos");
         }
         if (pesos == null || pesos.isEmpty()) {
             throw new IllegalArgumentException("Indica al menos un peso");
         }
         Snapshot snap = store.snapshot();
+        List<Cobro> lineas = snap.getCobros().stream()
+                .filter(c -> p.prefix.equals(c.getPeriodo()) && servicioId.equals(c.getServicioId()))
+                .toList();
+        if (lineas.isEmpty()) {
+            throw new IllegalArgumentException("No hay cobros generados para " + servicioId + " en " + p.prefix);
+        }
+        for (Cobro c : lineas) {
+            boolean pagado = snap.getPagos().stream().anyMatch(pg -> Pagos.esAbono(pg)
+                    && p.prefix.equals(pg.getPeriodo())
+                    && c.getInquilinoId().equals(pg.getInquilinoId())
+                    && servicioId.equals(pg.getServicioId()));
+            if (pagado) {
+                throw new IllegalStateException("El inquilino " + c.getInquilinoId() + " ya pago este servicio en "
+                        + p.prefix + "; no se puede reajustar el reparto");
+            }
+        }
+        for (Map.Entry<String, Integer> e : pesos.entrySet()) {
+            if (e.getValue() == null || e.getValue() < 1) {
+                throw new IllegalArgumentException("El peso debe ser entero mayor que 0");
+            }
+        }
+        for (Cobro c : lineas) {
+            if (!pesos.containsKey(c.getInquilinoId())) {
+                throw new IllegalArgumentException("El listado de pesos debe cubrir todas las lineas del servicio");
+            }
+        }
+        BigDecimal costo = facturas(snap.getPagos(), servicioId, p.prefix);
+        if (costo.signum() <= 0) {
+            throw new IllegalArgumentException("No hay factura registrada para " + servicioId + " en " + p.prefix);
+        }
+        List<Cobro> filas = repartirConPesos(lineas, pesos, costo);
+        reemplazarServicio(p.prefix, servicioId, filas);
+        return filas;
+    }
 
+    /**
+     * Mantiene los cobros de un servicio/mes alineados con sus facturas:
+     * si cambia el importe se reparte el nuevo costo con los MISMOS pesos;
+     * si ya no hay factura, se quitan las lineas de ese servicio/mes.
+     */
+    public synchronized void sincronizarFactura(String servicioId, String periodo) {
+        if (servicioId == null || periodo == null || Pagos.ALQUILER_ID.equals(servicioId)) {
+            return;
+        }
         List<Cobro> lineas = store.listCobros().stream()
                 .filter(c -> periodo.equals(c.getPeriodo()) && servicioId.equals(c.getServicioId()))
                 .toList();
         if (lineas.isEmpty()) {
-            throw new IllegalArgumentException("No hay cobros generados para " + servicioId + " en " + periodo);
+            return;
         }
-
-        List<Pago> abonos = snap.getPagos().stream()
-                .filter(pg -> periodo.equals(pg.getPeriodo()))
-                .filter(pg -> pg.getInquilinoId() != null && !pg.getInquilinoId().isBlank())
-                .toList();
-        for (Cobro c : lineas) {
-            boolean pagado = abonos.stream().anyMatch(pg -> c.getInquilinoId().equals(pg.getInquilinoId()));
-            if (pagado) {
-                throw new IllegalStateException("El inquilino " + c.getInquilinoId() + " ya tiene pagos en "
-                        + periodo + "; no se puede reajustar el reparto");
-            }
-        }
-
-        Map<String, Integer> porId = new HashMap<>();
-        for (Map.Entry<String, Integer> e : pesos.entrySet()) {
-            int peso = e.getValue();
-            if (peso < 1) {
-                throw new IllegalArgumentException("El peso debe ser entero mayor que 0");
-            }
-            porId.put(e.getKey(), peso);
-        }
-        for (Cobro c : lineas) {
-            if (!porId.containsKey(c.getInquilinoId())) {
-                throw new IllegalArgumentException("El listado de pesos debe cubrir todas las lineas del servicio");
-            }
-        }
-
-        BigDecimal costo = facturas(snap.getPagos(), servicioId, periodo);
+        BigDecimal costo = facturas(store.listPagos(), servicioId, periodo);
         if (costo.signum() <= 0) {
-            throw new IllegalArgumentException("No hay factura registrada para " + servicioId + " en " + periodo);
+            reemplazarServicio(periodo, servicioId, List.of());
+            return;
         }
-
-        int pesoTotal = lineas.stream().mapToInt(c -> porId.get(c.getInquilinoId())).sum();
-
-        List<Cobro> filas = new ArrayList<>();
+        Map<String, Integer> pesos = new HashMap<>();
         for (Cobro c : lineas) {
-            int peso = porId.get(c.getInquilinoId());
-            BigDecimal base = costo.multiply(BigDecimal.valueOf(peso))
-                    .divide(BigDecimal.valueOf(pesoTotal), 2, RoundingMode.HALF_UP);
-            filas.add(new Cobro(c.getId(), periodo, c.getInquilinoId(), servicioId,
-                    BigDecimal.valueOf(peso), BigDecimal.valueOf(pesoTotal),
-                    base, BigDecimal.ZERO, base,
-                    c.getHabitaciones(), c.getPersonas(),
-                    c.getExtras() != null ? new HashMap<>(c.getExtras()) : new HashMap<>()));
+            int peso = c.getPeso() == null ? 1 : Math.max(1, c.getPeso().intValue());
+            pesos.put(c.getInquilinoId(), peso);
         }
-
-        BigDecimal sumaBase = filas.stream().map(Cobro::getMontoBase)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal diferencia = costo.subtract(sumaBase);
-        if (diferencia.compareTo(BigDecimal.ZERO) != 0) {
-            Cobro mayor = lineas.get(0);
-            for (Cobro c : lineas) {
-                if (porId.get(c.getInquilinoId()) > porId.get(mayor.getInquilinoId())) {
-                    mayor = c;
-                }
-            }
-            for (Cobro c : filas) {
-                if (c.getInquilinoId().equals(mayor.getInquilinoId())) {
-                    c.setMontoBase(c.getMontoBase().add(diferencia));
-                    c.setMontoTotal(c.getMontoBase());
-                    break;
-                }
-            }
-        }
-
-        List<Cobro> restantes = new ArrayList<>(store.listCobros().stream()
-                .filter(c -> !(periodo.equals(c.getPeriodo()) && servicioId.equals(c.getServicioId())))
-                .toList());
-        restantes.addAll(filas);
-        store.replaceCobros(periodo, restantes);
-        return filas;
+        reemplazarServicio(periodo, servicioId, repartirConPesos(lineas, pesos, costo));
     }
 
     /** True si el inquilino habitaba la casa durante el periodo (ingreso/salida se cruzan con el mes). */
@@ -304,13 +290,8 @@ public class CalculoService {
         if (ingreso != null && ingreso.isAfter(p.fin)) {
             return false;
         }
-        if (inq.getFechaSalida() != null && !inq.getFechaSalida().isBlank()) {
-            LocalDate salida = parseDate(inq.getFechaSalida());
-            if (salida != null && salida.isBefore(p.inicio)) {
-                return false;
-            }
-        }
-        return true;
+        LocalDate salida = parseDate(inq.getFechaSalida());
+        return salida == null || !salida.isBefore(p.inicio);
     }
 
     private static BigDecimal nz(BigDecimal v) {
@@ -321,13 +302,13 @@ public class CalculoService {
         return periodo + "-" + inquilinoId + "-" + servicioId;
     }
 
-    static Periodo parse(String periodo) {
-        if (periodo == null) {
+    public static Periodo parse(String periodo) {
+        if (periodo == null || periodo.isBlank()) {
             throw new IllegalArgumentException("El periodo es obligatorio (YYYY-MM)");
         }
         try {
             YearMonth ym = YearMonth.parse(periodo.trim());
-            return new Periodo(periodo.trim(), ym.atDay(1), ym.atEndOfMonth());
+            return new Periodo(ym.toString(), ym.atDay(1), ym.atEndOfMonth());
         } catch (DateTimeParseException e) {
             throw new IllegalArgumentException("Periodo invalido '" + periodo + "', se esperaba YYYY-MM", e);
         }
@@ -338,15 +319,12 @@ public class CalculoService {
             return null;
         }
         try {
-            return LocalDate.parse(s.trim());
+            return LocalDate.parse(s.trim().length() > 10 ? s.trim().substring(0, 10) : s.trim());
         } catch (Exception e) {
             return null;
         }
     }
 
     public record Periodo(String prefix, LocalDate inicio, LocalDate fin) {
-    }
-
-    private record Peso(Asignacion asignacion, int unidades) {
     }
 }

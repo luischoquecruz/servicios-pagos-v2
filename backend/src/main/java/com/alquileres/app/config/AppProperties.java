@@ -15,6 +15,16 @@ public class AppProperties {
     private long syncMs = 30000;
     private long httpTimeoutMs = 60000;
     private String localFile = "./data/db.json";
+    /** Clave de acceso del Apps Script (la misma que API_KEY en Propiedades del script). */
+    private String scriptKey = "";
+
+    public String getScriptKey() {
+        return scriptKey;
+    }
+
+    public void setScriptKey(String scriptKey) {
+        this.scriptKey = scriptKey;
+    }
 
     public String getMode() {
         return mode;

@@ -15,7 +15,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  * Google Sheets (con Deployment ID) o base local JSON.
  */
 @Configuration
-@EnableConfigurationProperties(AppProperties.class)
+@EnableConfigurationProperties({AppProperties.class, SeguridadProperties.class})
 public class StoreConfig {
 
     @Bean

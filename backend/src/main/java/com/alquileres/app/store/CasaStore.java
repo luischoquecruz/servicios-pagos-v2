@@ -63,6 +63,19 @@ public interface CasaStore {
 
     void deletePago(String id);
 
+    /**
+     * Reemplaza solo las lineas de un servicio en el periodo (las demas del mes
+     * quedan intactas). Las implementaciones remotas lo hacen del lado del servidor.
+     */
+    default void replaceCobrosServicio(String periodo, String servicioId, List<Cobro> cobros) {
+        List<Cobro> delMes = new java.util.ArrayList<>(listCobros().stream()
+                .filter(c -> periodo.equals(c.getPeriodo()))
+                .filter(c -> !servicioId.equals(c.getServicioId()))
+                .toList());
+        delMes.addAll(cobros);
+        replaceCobros(periodo, delMes);
+    }
+
     /** Recarga la informacion de todas las hojas (sincronizacion). */
     Snapshot snapshot();
 
