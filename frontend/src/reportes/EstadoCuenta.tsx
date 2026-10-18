@@ -4,13 +4,15 @@ import { Cargando } from '../components/ui/Cargando';
 import { EstadoDeuda, Seccion } from '../components/Partes';
 import { IcoImprimir, IcoWhatsApp } from '../components/Iconos';
 import { enlaceWhatsApp, estadoCuenta, mesLargo, textoWhatsApp } from './modelo';
+import type { Filtro as Conceptos } from './modelo';
+import { ALQUILER_ID } from '../utils';
 import { fmtBs, fmtFecha, nombreServicio } from '../utils';
 import { irA } from '../nav';
 
 type Filtro = 'deuda' | 'seis' | 'todo';
 
 /** Estado de cuenta de un inquilino: que debe, por que y que pago. */
-export function EstadoCuentaPag({ inquilinoId }: { inquilinoId: string | null }) {
+export function EstadoCuentaPag({ inquilinoId, conceptos }: { inquilinoId: string | null; conceptos: Conceptos }) {
   const { snap, deudas, mapSvc, info } = useSnapshot();
   const [filtro, setFiltro] = useState<Filtro>('seis');
   const [copiado, setCopiado] = useState(false);
@@ -21,7 +23,9 @@ export function EstadoCuentaPag({ inquilinoId }: { inquilinoId: string | null })
     [deudas],
   );
   const id = inquilinoId ?? opciones[0]?.inquilino.id ?? null;
-  const ec = useMemo(() => (snap && id ? estadoCuenta(snap, id, deudas, mapSvc) : null), [snap, id, deudas, mapSvc]);
+  const ec = useMemo(() => (snap && id ? estadoCuenta(snap, id, deudas, mapSvc, conceptos) : null), [snap, id, deudas, mapSvc, conceptos]);
+  const verAlquiler = conceptos.has(ALQUILER_ID);
+  const verServicios = [...conceptos].some((x) => x !== ALQUILER_ID);
 
   if (!snap) return <Cargando />;
   if (opciones.length === 0) return <div className="seccion vacio">Aún no hay cobros ni pagos registrados.</div>;
@@ -83,7 +87,10 @@ export function EstadoCuentaPag({ inquilinoId }: { inquilinoId: string | null })
           </div>
         </div>
         <p className="muted" style={{ margin: '10px 0 0', fontSize: 13 }}>
-          Cobrado en total {fmtBs(ec.cargos)} · pagado {fmtBs(ec.pagado)} · emitido el {new Date().toLocaleDateString('es-BO')}
+          {verServicios && <>Total servicios <strong>{fmtBs(ec.servicios)}</strong> · </>}
+          {verAlquiler && <>Alquiler <strong>{fmtBs(ec.alquiler)}</strong> · </>}
+          Cobrado {fmtBs(ec.cargos)} · pagado {fmtBs(ec.pagado)} · emitido el {new Date().toLocaleDateString('es-BO')}
+          {!ec.completo && <> · <em>reporte parcial (solo los conceptos elegidos)</em></>}
         </p>
       </section>
 
@@ -121,7 +128,10 @@ export function EstadoCuentaPag({ inquilinoId }: { inquilinoId: string | null })
               </div>
             ))}
             <div className="cuenta-total">
-              <span>Cobro del mes {fmtBs(m.cargos)} · pagado {fmtBs(m.aplicado)}</span>
+              <span>
+                {verServicios && verAlquiler && m.servicios > 0 && m.alquiler > 0 ? <>Servicios {fmtBs(m.servicios)} + alquiler {fmtBs(m.alquiler)} = </> : null}
+                Cobro del mes {fmtBs(m.cargos)} · pagado {fmtBs(m.aplicado)}
+              </span>
               <span className={m.saldoAcumulado > 0.005 ? 'texto-debe' : 'texto-ok'}>
                 {m.saldoAcumulado > 0.005 ? `Debe acumulado ${fmtBs(m.saldoAcumulado)}` : 'Al día hasta aquí'}
               </span>

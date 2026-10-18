@@ -14,6 +14,12 @@ export interface DeudaConceptos {
   filas: Array<{ periodo: string; celdas: Map<string, { cobrado: number; pagado: number }> }>;
   alquiler: { cobrado: number; pagado: number; saldo: number };
   servicios: { cobrado: number; pagado: number; saldo: number };
+  /**
+   * Por mes y concepto: lo cobrado y lo pagado aplicado a ese concepto. Los pagos
+   * "en general" se reparten entre los conceptos del mes en proporcion a lo que
+   * cada uno tenia pendiente. Permite armar reportes solo de algunos conceptos.
+   */
+  detalleMes: Map<string, Map<string, { cobrado: number; pagado: number }>>;
 }
 
 /**
@@ -146,6 +152,29 @@ export function calcularDeudaPorConcepto(
     }
   }
 
+  const detalleMes = new Map<string, Map<string, { cobrado: number; pagado: number }>>();
+  for (const [conceptoId, mensualConc] of cobroConceptoMes) {
+    for (const [periodo, cobrado] of mensualConc) {
+      let m = detalleMes.get(periodo);
+      if (!m) {
+        m = new Map();
+        detalleMes.set(periodo, m);
+      }
+      m.set(conceptoId, { cobrado, pagado: pagadoConceptoMes.get(conceptoId)?.get(periodo) ?? 0 });
+    }
+  }
+  for (const [periodo, gen] of pagadoGeneralMes) {
+    const m = detalleMes.get(periodo);
+    if (!m) continue;
+    let suma = 0;
+    for (const c of m.values()) suma += Math.max(0, c.cobrado - c.pagado);
+    if (suma <= 0) continue;
+    const pendientes = [...m.values()].map((c) => Math.max(0, c.cobrado - c.pagado));
+    [...m.values()].forEach((c, i) => {
+      c.pagado += (gen * pendientes[i]) / suma;
+    });
+  }
+
   const mensual: FilaDeuda[] = [...combinado.keys()]
     .sort()
     .map((periodo) => {
@@ -200,6 +229,7 @@ export function calcularDeudaPorConcepto(
       pagado: cobradoSvc - saldoSvc,
       saldo: saldoSvc,
     },
+    detalleMes,
   };
 }
 

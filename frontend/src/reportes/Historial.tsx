@@ -5,26 +5,30 @@ import { Cifra, Seccion } from '../components/Partes';
 import { BarrasAgrupadas } from '../components/Graficos';
 import { IcoDescargar, IcoImprimir } from '../components/Iconos';
 import { aniosDisponibles, historialAnual, mesLargo, nombreMes } from './modelo';
+import type { Filtro } from './modelo';
+import { ALQUILER_ID } from '../utils';
 import { descargarCSV, fmtBs } from '../utils';
 import { irA } from '../nav';
 
 const CORTO = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
 
 /** Historial del año: evolucion mes a mes, por servicio y por inquilino. */
-export function HistorialPag() {
+export function HistorialPag({ filtro }: { filtro: Filtro }) {
   const { snap, deudas } = useSnapshot();
   const anios = useMemo(() => (snap ? aniosDisponibles(snap) : []), [snap]);
   const [anio, setAnio] = useState(String(new Date().getFullYear()));
-  const h = useMemo(() => (snap ? historialAnual(snap, anio, deudas) : null), [snap, anio, deudas]);
+  const h = useMemo(() => (snap ? historialAnual(snap, anio, deudas, filtro) : null), [snap, anio, deudas, filtro]);
+  const verAlquiler = filtro.has(ALQUILER_ID);
+  const verServicios = [...filtro].some((x) => x !== ALQUILER_ID);
   if (!snap || !h) return <Cargando />;
 
   const conDatos = h.meses.map((m, i) => ({ m, i })).filter(({ m }) => m.cobrado > 0 || m.facturado > 0);
   const maxSvc = Math.max(1, ...h.servicios.flatMap((s) => s.porMes.map((v) => v ?? 0)));
 
   const exportar = () => {
-    const filas: (string | number)[][] = [['Mes', 'Facturas', 'Cobrado', 'Pagado', 'Falta']];
-    for (const m of h.meses) filas.push([nombreMes(m.periodo), m.facturado, m.cobrado, m.aplicado, m.pendiente]);
-    filas.push(['Total', h.totales.facturado, h.totales.cobrado, h.totales.aplicado, h.totales.pendiente]);
+    const filas: (string | number)[][] = [['Mes', 'Facturas', 'Total servicios', 'Alquiler', 'Cobrado', 'Pagado', 'Falta']];
+    for (const m of h.meses) filas.push([nombreMes(m.periodo), m.facturado, m.servicios, m.alquiler, m.cobrado, m.aplicado, m.pendiente]);
+    filas.push(['Total', h.totales.facturado, h.totales.servicios, h.totales.alquiler, h.totales.cobrado, h.totales.aplicado, h.totales.pendiente]);
     filas.push([], ['Servicio', ...CORTO, 'Total']);
     for (const s of h.servicios) filas.push([s.nombre, ...s.porMes.map((v) => v ?? ''), s.total]);
     descargarCSV(`historial-${anio}.csv`, filas);
@@ -48,7 +52,7 @@ export function HistorialPag() {
 
       <div className="cifras">
         <Cifra etiqueta="Facturas del año" valor={fmtBs(h.totales.facturado)} />
-        <Cifra etiqueta="Cobrado" valor={fmtBs(h.totales.cobrado)} nota="servicios + alquiler" />
+        <Cifra etiqueta="Cobrado" valor={fmtBs(h.totales.cobrado)} nota={`servicios ${fmtBs(h.totales.servicios)} + alquiler ${fmtBs(h.totales.alquiler)}`} />
         <Cifra etiqueta="Pagado" valor={fmtBs(h.totales.aplicado)} />
         <Cifra etiqueta="Falta cobrar" valor={fmtBs(h.totales.pendiente)} />
       </div>
@@ -69,13 +73,20 @@ export function HistorialPag() {
         <div className="tabla-wrap" style={{ marginTop: 12 }}>
           <table className="tabla">
             <thead>
-              <tr><th>Mes</th><th className="num">Facturas</th><th className="num">Cobrado</th><th className="num">Pagado</th><th className="num">Falta</th></tr>
+              <tr>
+                <th>Mes</th><th className="num">Facturas</th>
+                {verServicios && <th className="num col-subtotal">Total servicios</th>}
+                {verAlquiler && <th className="num">Alquiler</th>}
+                <th className="num">Cobrado</th><th className="num">Pagado</th><th className="num">Falta</th>
+              </tr>
             </thead>
             <tbody>
               {conDatos.map(({ m }) => (
                 <tr key={m.periodo}>
                   <td style={{ textTransform: 'capitalize' }}>{mesLargo(m.periodo)}</td>
                   <td className="num">{fmtBs(m.facturado)}</td>
+                  {verServicios && <td className="num col-subtotal">{fmtBs(m.servicios)}</td>}
+                  {verAlquiler && <td className="num">{fmtBs(m.alquiler)}</td>}
                   <td className="num">{fmtBs(m.cobrado)}</td>
                   <td className="num">{fmtBs(m.aplicado)}</td>
                   <td className={`num ${m.pendiente > 0.005 ? 'texto-debe' : ''}`}>{fmtBs(m.pendiente)}</td>
@@ -86,6 +97,8 @@ export function HistorialPag() {
               <tr className="fila-total">
                 <td>Total</td>
                 <td className="num">{fmtBs(h.totales.facturado)}</td>
+                {verServicios && <td className="num col-subtotal">{fmtBs(h.totales.servicios)}</td>}
+                {verAlquiler && <td className="num">{fmtBs(h.totales.alquiler)}</td>}
                 <td className="num">{fmtBs(h.totales.cobrado)}</td>
                 <td className="num">{fmtBs(h.totales.aplicado)}</td>
                 <td className="num">{fmtBs(h.totales.pendiente)}</td>
@@ -121,11 +134,14 @@ export function HistorialPag() {
       )}
 
       {h.inquilinos.length > 0 && (
-        <Seccion titulo="Inquilinos mes a mes" descripcion="Cada celda muestra lo que falta pagar de ese mes; «al día» si ya está pagado.">
+        <Seccion titulo="Inquilinos mes a mes" descripcion="Cada celda muestra lo que falta pagar de ese mes («al día» si ya está pagado); al final, lo cobrado en el año.">
           <div className="tabla-wrap">
             <table className="tabla">
               <thead>
-                <tr><th className="sticky-col">Inquilino</th>{CORTO.map((c) => <th key={c} className="centro">{c}</th>)}<th className="num">Falta</th></tr>
+                <tr><th className="sticky-col">Inquilino</th>{CORTO.map((c) => <th key={c} className="centro">{c}</th>)}
+                  {verServicios && <th className="num col-subtotal">Total servicios</th>}
+                  {verAlquiler && <th className="num">Alquiler</th>}
+                  <th className="num">Falta</th></tr>
               </thead>
               <tbody>
                 {h.inquilinos.map((q) => (
@@ -138,6 +154,8 @@ export function HistorialPag() {
                             : <span className="texto-ok">al día</span>}
                       </td>
                     ))}
+                    {verServicios && <td className="num col-subtotal">{fmtBs(q.servicios)}</td>}
+                    {verAlquiler && <td className="num">{fmtBs(q.alquiler)}</td>}
                     <td className={`num ${q.saldo > 0.005 ? 'texto-debe' : ''}`}><strong>{fmtBs(q.saldo)}</strong></td>
                   </tr>
                 ))}

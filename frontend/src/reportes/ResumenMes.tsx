@@ -4,24 +4,32 @@ import { Cargando } from '../components/ui/Cargando';
 import { Cifra, EstadoDeuda, Medidor, Seccion, SelectorMes } from '../components/Partes';
 import { IcoAlerta, IcoDescargar, IcoImprimir } from '../components/Iconos';
 import { mesLargo, repartoServicios, resumenMes } from './modelo';
+import type { Filtro } from './modelo';
+import { ALQUILER_ID } from '../utils';
 import { RepartoTarjeta } from '../components/Reparto';
 import { descargarCSV, fmtBs, mesActual } from '../utils';
 import { irA } from '../nav';
 
 /** Resumen del mes para el administrador, en lenguaje simple. */
-export function ResumenMesPag() {
+export function ResumenMesPag({ filtro }: { filtro: Filtro }) {
   const { snap, deudas, info } = useSnapshot();
   const [periodo, setPeriodo] = useState(mesActual());
-  const r = useMemo(() => (snap ? resumenMes(snap, periodo, deudas) : null), [snap, periodo, deudas]);
-  const repartos = useMemo(() => (snap ? repartoServicios(snap, periodo).filter((x) => x.lineas.length > 0) : []), [snap, periodo]);
+  const r = useMemo(() => (snap ? resumenMes(snap, periodo, deudas, filtro) : null), [snap, periodo, deudas, filtro]);
+  const repartos = useMemo(
+    () => (snap ? repartoServicios(snap, periodo).filter((x) => x.lineas.length > 0 && filtro.has(x.servicioId)) : []),
+    [snap, periodo, filtro],
+  );
+  const verAlquiler = filtro.has(ALQUILER_ID);
+  const verServicios = [...filtro].some((id) => id !== ALQUILER_ID);
   if (!snap || !r) return <Cargando />;
 
   const pct = r.cobrado > 0 ? Math.round((r.aplicado / r.cobrado) * 100) : 0;
   const descuadres = repartos.filter((x) => x.desactualizado.length > 0);
 
   const exportar = () => {
-    const filas: (string | number)[][] = [['Inquilino', 'Cobro del mes', 'Pagado', 'Falta del mes', 'Deuda total']];
-    for (const f of r.porInquilino) filas.push([f.nombre, f.cobrado, f.aplicado, f.pendiente, f.saldoTotal]);
+    const filas: (string | number)[][] = [['Inquilino', 'Total servicios', 'Alquiler', 'Cobro del mes', 'Pagado', 'Falta del mes', 'Deuda total']];
+    for (const f of r.porInquilino) filas.push([f.nombre, f.servicios, f.alquiler, f.cobrado, f.aplicado, f.pendiente, f.saldoTotal]);
+    filas.push(['Total', r.servicios, r.alquiler, r.cobrado, r.aplicado, r.pendiente, r.deudaTotal]);
     filas.push([], ['Servicio', 'Factura', 'Repartido']);
     for (const s of r.porServicio) filas.push([s.nombre, s.factura ?? '', s.repartido]);
     descargarCSV(`resumen-${periodo}.csv`, filas);
@@ -79,6 +87,8 @@ export function ResumenMesPag() {
             <thead>
               <tr>
                 <th>Inquilino</th>
+                {verServicios && <th className="num col-subtotal">Total servicios</th>}
+                {verAlquiler && <th className="num">Alquiler</th>}
                 <th className="num">Cobro del mes</th>
                 <th className="num">Pagado</th>
                 <th className="num">Falta del mes</th>
@@ -89,6 +99,8 @@ export function ResumenMesPag() {
               {r.porInquilino.map((f) => (
                 <tr key={f.inquilinoId} onClick={() => irA('reportes', { tab: 'cuenta', inq: f.inquilinoId })} style={{ cursor: 'pointer' }}>
                   <td className="celda-nombre">{f.nombre}</td>
+                  {verServicios && <td className="num col-subtotal">{fmtBs(f.servicios)}</td>}
+                  {verAlquiler && <td className="num">{fmtBs(f.alquiler)}</td>}
                   <td className="num">{fmtBs(f.cobrado)}</td>
                   <td className="num">{fmtBs(f.aplicado)}</td>
                   <td className={`num ${f.pendiente > 0.005 ? 'texto-debe' : ''}`}>{fmtBs(f.pendiente)}</td>
@@ -96,9 +108,22 @@ export function ResumenMesPag() {
                 </tr>
               ))}
               {r.porInquilino.length === 0 && (
-                <tr><td colSpan={5} className="vacio">Sin cobros este mes.</td></tr>
+                <tr><td colSpan={7} className="vacio">Sin cobros este mes.</td></tr>
               )}
             </tbody>
+            {r.porInquilino.length > 0 && (
+              <tfoot>
+                <tr className="fila-total">
+                  <td>Total</td>
+                  {verServicios && <td className="num col-subtotal">{fmtBs(r.servicios)}</td>}
+                  {verAlquiler && <td className="num">{fmtBs(r.alquiler)}</td>}
+                  <td className="num">{fmtBs(r.cobrado)}</td>
+                  <td className="num">{fmtBs(r.aplicado)}</td>
+                  <td className="num">{fmtBs(r.pendiente)}</td>
+                  <td>{r.deudores} con deuda · {fmtBs(r.deudaTotal)}</td>
+                </tr>
+              </tfoot>
+            )}
           </table>
         </div>
       </Seccion>

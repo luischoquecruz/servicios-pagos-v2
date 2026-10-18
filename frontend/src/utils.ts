@@ -16,7 +16,8 @@ export function nombreServicio(
 }
 
 export function fmtBs(v: number | string | null | undefined): string {
-  const n = toNum(v);
+  let n = toNum(v);
+  if (Math.abs(n) < 0.005) n = 0; // evita "Bs -0,00" por redondeo
   return 'Bs ' + n.toLocaleString('es-BO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
