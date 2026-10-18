@@ -13,6 +13,14 @@ import type {
   Sync,
 } from './types';
 import { API_URL, MODO_SCRIPT } from './modo';
+import { ErrorAcceso, avisarClaveInvalida, esErrorAcceso, leerClave } from './clave';
+
+/**
+ * Las escrituras en modo script piden ?conSync=1 y el script devuelve los datos
+ * actualizados en la misma respuesta; se publican aqui para que la pantalla se
+ * actualice sin otra llamada.
+ */
+export const eventosDatos = new EventTarget();
 import { normPeriodo } from './utils';
 
 interface Endpoint {
@@ -24,11 +32,20 @@ interface Endpoint {
 }
 
 function scriptURL(accion: string, params?: Record<string, string>): string {
-  const q = new URLSearchParams({ action: accion });
+  const q = new URLSearchParams({ action: accion, key: leerClave() });
   if (params) {
     for (const k of Object.keys(params)) q.set(k, params[k]);
   }
   return `${API_URL}?${q.toString()}`;
+}
+
+/** Lanza el error adecuado; si es de acceso, avisa para volver a pedir la clave. */
+function fallar(msg: string, status?: number): never {
+  if (esErrorAcceso(msg, status)) {
+    avisarClaveInvalida(msg);
+    throw new ErrorAcceso(msg.replace(/^(Error: )?(NO_AUTORIZADO|NO_CONFIGURADA): ?/, ''));
+  }
+  throw new Error(msg.replace(/^Error: /, ''));
 }
 
 async function pedir(url: string, init: RequestInit): Promise<any> {
@@ -41,12 +58,17 @@ async function pedir(url: string, init: RequestInit): Promise<any> {
     } catch {
       /* respuesta sin cuerpo */
     }
-    throw new Error(msg);
+    fallar(msg, res.status);
   }
   if (res.status === 204) return undefined;
-  const body = await res.json();
+  const texto = await res.text();
+  if (texto === '') return undefined;
+  const body = JSON.parse(texto);
   if (body && typeof body === 'object') {
-    if (body.ok === false) throw new Error(body.error || 'Error de la API');
+    if (body.ok === false) fallar(body.error || 'Error de la API');
+    if (body.sync) {
+      eventosDatos.dispatchEvent(new CustomEvent('sync', { detail: normalizarSync(body.sync as Sync) }));
+    }
     if (body.ok === true && 'data' in body) return body.data;
   }
   return body;
@@ -61,17 +83,22 @@ async function llamar(e: Endpoint): Promise<any> {
       init.headers = { 'Content-Type': 'text/plain;charset=utf-8' };
       init.body = JSON.stringify(e.body);
     }
-    return pedir(scriptURL(e.accion, e.params), init);
+    const params = e.metodo === 'GET' ? e.params : { ...(e.params ?? {}), conSync: '1' };
+    return pedir(scriptURL(e.accion, params), init);
   }
   init.method = e.metodo;
   let url = `${API_URL}/api/${e.ruta}`;
   if (e.params) url += '?' + new URLSearchParams(e.params).toString();
+  const headers: Record<string, string> = {};
+  const clave = leerClave();
+  if (clave) headers['X-Api-Key'] = clave;
   if (e.body !== undefined) {
     // Spring/jackson requiere application/json para deserializar el body;
     // sin este header fetch manda text/plain y el backend responde 415/500.
-    init.headers = { 'Content-Type': 'application/json' };
+    headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(e.body);
   }
+  init.headers = headers;
   return pedir(url, init);
 }
 
@@ -101,12 +128,20 @@ function normalizarSnapshot(s: Snapshot): Snapshot {
 
 export const getSnapshot = async (): Promise<Snapshot> =>
   normalizarSnapshot(await llamar({ ruta: 'snapshot', metodo: 'GET', accion: 'snapshot' }));
-export const getSync = async (): Promise<Sync> => {
-  const d: Sync = await llamar({ ruta: 'sync', metodo: 'GET', accion: 'sync' });
+function normalizarSync(d: Sync): Sync {
   return {
     snapshot: normalizarSnapshot(d.snapshot),
     info: d.info ? { ...d.info, periodos: (d.info.periodos ?? []).map(normPeriodo) } : d.info,
   };
+}
+
+export const getSync = async (): Promise<Sync> =>
+  normalizarSync(await llamar({ ruta: 'sync', metodo: 'GET', accion: 'sync' }));
+
+/** Consulta liviana: solo la version de los datos (modo script). */
+export const getVersion = async (): Promise<number> => {
+  const d: { version: number } = await llamar({ ruta: 'version', metodo: 'GET', accion: 'version' });
+  return Number(d?.version ?? 0);
 };
 export const getInfo = async (): Promise<Info> => {
   const d: Info = await llamar({ ruta: 'config', metodo: 'GET', accion: 'config' });
@@ -157,6 +192,8 @@ export const eliminarServicioInquilino = (id: string): Promise<void> =>
 
 export const guardarAsignacion = (a: Asignacion): Promise<Asignacion> =>
   llamar({ ruta: 'asignaciones', metodo: 'POST', accion: 'asignaciones.guardar', body: a });
+export const copiarAsignaciones = (origen: string, destino: string): Promise<{ copiadas: number }> =>
+  llamar({ ruta: 'asignaciones/copiar', metodo: 'POST', accion: 'asignaciones.copiar', params: { origen, destino } });
 export const eliminarAsignacion = (id: string): Promise<void> =>
   llamar({ ruta: `asignaciones/${id}`, metodo: 'DELETE', accion: 'asignaciones.eliminar', params: { id } });
 

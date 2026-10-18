@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 
-/** Ejecuta el fetcher cada `intervalo` ms y devuelve datos/error/cargando. */
+/**
+ * Ejecuta el fetcher cada `intervalo` ms y devuelve datos/error/cargando.
+ * - Nunca hay dos consultas a la vez: la siguiente se programa al terminar la anterior.
+ * - Se pausa con la pestaña oculta y consulta de inmediato al volver.
+ */
 export function usePolling<T>(
   fetcher: () => Promise<T>,
   intervalo: number,
@@ -16,9 +20,19 @@ export function usePolling<T>(
   useEffect(() => {
     if (!activo) return;
     let parado = false;
+    let enCurso = false;
     let timer: number | undefined;
 
+    const programar = () => {
+      if (parado) return;
+      window.clearTimeout(timer);
+      if (document.visibilityState === 'hidden') return;
+      timer = window.setTimeout(ejecutar, intervalo);
+    };
+
     const ejecutar = async () => {
+      if (parado || enCurso) return;
+      enCurso = true;
       try {
         const r = await fetcherRef.current();
         if (!parado) {
@@ -28,15 +42,29 @@ export function usePolling<T>(
       } catch (e) {
         if (!parado) setError(e instanceof Error ? e.message : String(e));
       } finally {
-        if (!parado) setCargando(false);
+        enCurso = false;
+        if (!parado) {
+          setCargando(false);
+          programar();
+        }
+      }
+    };
+
+    const alCambiarVisibilidad = () => {
+      if (document.visibilityState === 'visible') {
+        window.clearTimeout(timer);
+        ejecutar();
+      } else {
+        window.clearTimeout(timer);
       }
     };
 
     ejecutar();
-    timer = window.setInterval(ejecutar, intervalo);
+    document.addEventListener('visibilitychange', alCambiarVisibilidad);
     return () => {
       parado = true;
-      if (timer) window.clearInterval(timer);
+      window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', alCambiarVisibilidad);
     };
   }, [intervalo, activo, refreshKey]);
 
