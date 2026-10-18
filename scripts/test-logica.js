@@ -7,6 +7,8 @@
  */
 'use strict';
 
+const CLAVE = 'clave-de-prueba-123';
+
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
@@ -15,14 +17,21 @@ const vm = require('vm');
 
 function crearStubs() {
   const datos = {}; // nombreHoja -> 2D array (con encabezado)
+  const propiedades = { API_KEY: CLAVE };
+  const cacheMem = {};
 
   function getSheet(nombre) {
     if (!datos[nombre]) datos[nombre] = [[]];
     return {
       getLastRow() { return datos[nombre].length; },
       getLastColumn() { return Math.max(1, ...datos[nombre].map(r => r.length)); },
-      getRange(r, c, nr, nc) {
+      getRange(r, c, nr = 1, nc = 1) {
         return {
+          clearContent() {
+            for (let i = r - 1; i < r - 1 + nr && i < datos[nombre].length; i++) {
+              for (let j = c - 1; j < c - 1 + nc; j++) datos[nombre][i][j] = '';
+            }
+          },
           getValues() {
             return datos[nombre].slice(r - 1, r - 1 + nr).map(row => {
               const out = [];
@@ -33,11 +42,19 @@ function crearStubs() {
           setValues(v) {
             const max = Math.max(datos[nombre].length, r - 1 + v.length);
             while (datos[nombre].length < max) datos[nombre].push([]);
-            v.forEach((fila, i) => { datos[nombre][r - 1 + i] = fila.slice(); });
+            v.forEach((fila, i) => {
+              const dest = datos[nombre][r - 1 + i];
+              fila.forEach((val, j) => { dest[c - 1 + j] = val; });
+            });
           },
         };
       },
       clearContents() { datos[nombre] = [[]]; },
+      deleteRow(n) { datos[nombre].splice(n - 1, 1); },
+      deleteRows(n, k) { datos[nombre].splice(n - 1, k); },
+      insertRowsAfter() {},
+      getMaxRows() { return datos[nombre].length + 100; },
+      getFrozenRows() { return 1; },
       setFrozenRows() {},
       setFontWeight() {},
     };
@@ -62,6 +79,7 @@ function crearStubs() {
       getActiveSpreadsheet() {
         return {
           getName: () => 'Casa',
+          getSpreadsheetTimeZone: () => 'America/La_Paz',
           getSheetByName: (n) => (datos[n] ? getSheet(n) : null),
           insertSheet: (n) => {
             datos[n] = [[]];
@@ -69,6 +87,25 @@ function crearStubs() {
           },
           setId() {},
           getSheets: () => Object.keys(datos).map(getSheet),
+        };
+      },
+    },
+    isFinite,
+    CacheService: {
+      getScriptCache() {
+        return {
+          get: (k) => (k in cacheMem ? cacheMem[k] : null),
+          getAll: (ks) => { const o = {}; ks.forEach((k) => { if (k in cacheMem) o[k] = cacheMem[k]; }); return o; },
+          putAll: (o) => { Object.assign(cacheMem, o); },
+        };
+      },
+    },
+    Logger: { log() {} },
+    PropertiesService: {
+      getScriptProperties() {
+        return {
+          getProperty: (k) => propiedades[k] || null,
+          setProperty: (k, v) => { propiedades[k] = v; },
         };
       },
     },
@@ -81,7 +118,12 @@ function crearStubs() {
       getUuid: () => 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
       formatDate(d, tz, fmt) {
         const pad = (n) => (n < 10 ? '0' : '') + n;
-        return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+        const off = tz === 'America/La_Paz' ? -4 * 3600000 : 0;
+        const x = new Date(d.getTime() + off);
+        return fmt
+          .replace('yyyy', String(x.getUTCFullYear()))
+          .replace('MM', pad(x.getUTCMonth() + 1))
+          .replace('dd', pad(x.getUTCDate()));
       },
     },
     ContentService: {
@@ -92,17 +134,17 @@ function crearStubs() {
     },
   };
 
-  return { sandbox, datos };
+  return { sandbox, datos, propiedades, cacheMem };
 }
 
 // ---------- cargar Code.gs ----------
 
 function cargar() {
-  const { sandbox, datos } = crearStubs();
+  const { sandbox, datos, propiedades, cacheMem } = crearStubs();
   const codigo = fs.readFileSync(path.join(__dirname, 'Code.gs'), 'utf8');
   vm.createContext(sandbox);
   vm.runInContext(codigo, sandbox, { filename: 'Code.gs' });
-  return { ctx: sandbox, datos };
+  return { ctx: sandbox, datos, propiedades, cacheMem };
 }
 
 // ---------- helpers ----------
@@ -122,8 +164,8 @@ function cobroDe(cobros, id) {
 
 // ---------- escenarios ----------
 
-function main() {
-  const { ctx, datos } = cargar();
+async function main() {
+  const { ctx, datos, propiedades, cacheMem } = cargar();
   const calcular = ctx.calcular;
   const datosBase = () => ({
     inquilinos: ctx.leerHoja('inquilinos'),
@@ -285,16 +327,16 @@ function main() {
   igual(rF.detalle.find((f) => f.inquilinoId === 'inq-a').saldo, 10, 'F7: saldo detalle');
 
   // registrarPago permite factura (inquilinoId null) y exige servicio
-  let fr = JSON.parse(ctx.doPost({ parameter: { action: 'pagos.crear' }, postData: { contents: JSON.stringify({ inquilinoId: null, servicioId: 'svc-luz', periodo: '2026-09', montoBs: 25, cantidad: 12, unidadMedida: 'kWh' }) } }).getContent());
+  let fr = JSON.parse(ctx.doPost({ parameter: { key: CLAVE, action: 'pagos.crear' }, postData: { contents: JSON.stringify({ inquilinoId: null, servicioId: 'svc-luz', periodo: '2026-09', montoBs: 25, cantidad: 12, unidadMedida: 'kWh' }) } }).getContent());
   igual(fr.ok, true, 'F8: crear factura ok');
   igual(fr.data.inquilinoId, null, 'F9: factura sin inquilino');
   igual(fr.data.cantidad, 12, 'F8b: cantidad persistida');
   igual(fr.data.unidadMedida, 'kWh', 'F8c: unidad persistida');
-  fr = JSON.parse(ctx.doPost({ parameter: { action: 'pagos.crear' }, postData: { contents: JSON.stringify({ inquilinoId: null, servicioId: null, periodo: '2026-09', montoBs: 25 }) } }).getContent());
+  fr = JSON.parse(ctx.doPost({ parameter: { key: CLAVE, action: 'pagos.crear' }, postData: { contents: JSON.stringify({ inquilinoId: null, servicioId: null, periodo: '2026-09', montoBs: 25 }) } }).getContent());
   igual(fr.ok, false, 'F10: factura sin servicio rechazada');
 
   // Factura duplicada (mismo servicio + periodo) rechazada
-  fr = JSON.parse(ctx.doPost({ parameter: { action: 'pagos.crear' }, postData: { contents: JSON.stringify({ inquilinoId: null, servicioId: 'svc-luz', periodo: '2026-09', montoBs: 80 }) } }).getContent());
+  fr = JSON.parse(ctx.doPost({ parameter: { key: CLAVE, action: 'pagos.crear' }, postData: { contents: JSON.stringify({ inquilinoId: null, servicioId: 'svc-luz', periodo: '2026-09', montoBs: 80 }) } }).getContent());
   igual(fr.ok, false, 'F11: factura duplicada rechazada');
 
   // Duplicidad de servicios por nombre (sin distinguir mayusculas)
@@ -332,66 +374,68 @@ function main() {
   // ---- Dispatcher HTTP (doGet / doPost) ----
   const bodyDe = (out) => JSON.parse(out.getContent());
 
-  let r = bodyDe(ctx.doGet({ parameter: { action: 'snapshot' } }));
+  let r = bodyDe(ctx.doGet({ parameter: { key: CLAVE, action: 'snapshot' } }));
    igual(r.ok, true, 'D1: snapshot ok');
   igual(Array.isArray(r.data.serviciosInquilinos), true, 'D2: snapshot camelCase');
   igual(Array.isArray(r.data.servicios_inquilinos), true, 'D3: snapshot alias snake_case');
   igual(Array.isArray(r.data.asignaciones), true, 'D4: snapshot asignaciones');
   igual(r.data.fuente, 'google', 'D5: fuente');
 
-  r = bodyDe(ctx.doGet({ parameter: { action: 'sync' } }));
+  r = bodyDe(ctx.doGet({ parameter: { key: CLAVE, action: 'sync' } }));
   igual(r.ok, true, 'D5: sync ok');
   igual(Array.isArray(r.data.snapshot.inquilinos), true, 'D6: sync.snapshot');
   igual(r.data.info.google, true, 'D7: sync.info.google');
   igual(r.data.info.fuente, 'google', 'D8: sync.info.fuente');
 
-  r = bodyDe(ctx.doGet({ parameter: { action: 'reporte.mensual', periodo: '2026-08' } }));
+  r = bodyDe(ctx.doGet({ parameter: { key: CLAVE, action: 'reporte.mensual', periodo: '2026-08' } }));
   igual(r.ok, true, 'D9: reporte.mensual ok');
   igual(r.data.periodo, '2026-08', 'D10: periodo');
 
-  r = bodyDe(ctx.doGet({ parameter: { action: 'noexiste' } }));
+  r = bodyDe(ctx.doGet({ parameter: { key: CLAVE, action: 'noexiste' } }));
   igual(r.ok, false, 'D11: accion desconocida');
 
-  r = bodyDe(ctx.doPost({ parameter: { action: 'inquilinos.crear' }, postData: { contents: JSON.stringify({ nombre: 'Api Test', habilitado: true, habitaciones: 2, personas: 3 }) } }));
+  r = bodyDe(ctx.doPost({ parameter: { key: CLAVE, action: 'inquilinos.crear' }, postData: { contents: JSON.stringify({ nombre: 'Api Test', habilitado: true, habitaciones: 2, personas: 3 }) } }));
   igual(r.ok, true, 'D12: crear ok');
   igual(r.data.id.startsWith('inq-'), true, 'D13: id creado');
   igual(r.data.fechaIngreso !== undefined, true, 'D14: fechaIngreso por defecto');
   const idCreadoApi = r.data.id;
 
-  r = bodyDe(ctx.doPost({ parameter: { action: 'cobros.generar', periodo: '2026-08' } }));
+  r = bodyDe(ctx.doPost({ parameter: { key: CLAVE, action: 'cobros.generar', periodo: '2026-08' } }));
   igual(r.ok, true, 'D15: cobros.generar ok');
   igual(Array.isArray(r.data), true, 'D16: devuelve lista');
   const persistidos = ctx.leerHoja('cobros').filter((c) => c.periodo === '2026-08');
   igual(persistidos.length, r.data.length, 'D17: cobros persistidos');
 
   // asignaciones.guardar / eliminar
-  r = bodyDe(ctx.doPost({ parameter: { action: 'asignaciones.guardar' }, postData: { contents: JSON.stringify({ periodo: '2026-08', inquilinoId: 'inq-a', servicioId: 'svc-luz', activo: true, extras: { Refrigerador: 2, Plancha: 1 } }) } }));
+  r = bodyDe(ctx.doPost({ parameter: { key: CLAVE, action: 'asignaciones.guardar' }, postData: { contents: JSON.stringify({ periodo: '2026-08', inquilinoId: 'inq-a', servicioId: 'svc-luz', activo: true, extras: { Refrigerador: 2, Plancha: 1 } }) } }));
   igual(r.ok, true, 'D18: asignaciones.guardar ok');
   igual(r.data.id, '2026-08-inq-a-svc-luz', 'D19: id compuesto');
   igual(ctx.leerHoja('asignaciones').filter((a) => a.id === '2026-08-inq-a-svc-luz').length, 1, 'D20: persistida');
-  r = bodyDe(ctx.doPost({ parameter: { action: 'asignaciones.eliminar', id: '2026-08-inq-a-svc-luz' } }));
+  r = bodyDe(ctx.doPost({ parameter: { key: CLAVE, action: 'asignaciones.eliminar', id: '2026-08-inq-a-svc-luz' } }));
   igual(r.ok, true, 'D21: asignaciones.eliminar ok');
   igual(ctx.leerHoja('asignaciones').filter((a) => a.id === '2026-08-inq-a-svc-luz').length, 0, 'D22: borrada');
 
-  r = bodyDe(ctx.doPost({ parameter: {}, postData: { contents: JSON.stringify({ action: 'upsert', sheet: 'inquilinos', row: { id: 'x-1', nombre: 'Viejo' } }) } }));
+  r = bodyDe(ctx.doPost({ parameter: { key: CLAVE,}, postData: { contents: JSON.stringify({ action: 'upsert', sheet: 'inquilinos', row: { id: 'x-1', nombre: 'Viejo' } }) } }));
   igual(r.ok, true, 'D23: API interna upsert ok');
 
-  r = bodyDe(ctx.doPost({ parameter: {}, postData: { contents: JSON.stringify({ action: 'delete', sheet: 'inquilinos', id: 'x-1' }) } }));
+  r = bodyDe(ctx.doPost({ parameter: { key: CLAVE,}, postData: { contents: JSON.stringify({ action: 'delete', sheet: 'inquilinos', id: 'x-1' }) } }));
   igual(r.ok, true, 'D24: API interna delete ok');
 
   // ---- Normalizacion de periodo ----
   igual(ctx.normalizar('periodo', '2026-04'), '2026-04', 'N1: string YYYY-MM');
   igual(ctx.normalizar('periodo', '2026-04-05'), '2026-04', 'N2: con dia');
   igual(ctx.normalizar('periodo', 'Wed Apr 01 2026 00:00:00 GMT-0400 (hora de Bolivia)'), '2026-04', 'N3: Date.toString');
-  igual(ctx.normalizar('periodo', new Date(Date.UTC(2026, 3, 1))), '2026-04', 'N4: objeto Date UTC');
+  // Una celda de fecha de la planilla (zona La Paz) es medianoche local = 04:00 UTC.
+  igual(ctx.normalizar('periodo', new Date(Date.UTC(2026, 3, 1, 4))), '2026-04', 'N4: objeto Date (medianoche La Paz)');
+  igual(ctx.normalizar('fechaPago', new Date(Date.UTC(2026, 3, 30, 4))), '2026-04-30', 'N4b: fecha en zona de la planilla');
   igual(ctx.normalizar('periodo', ''), null, 'N5: vacio -> null');
-  igual(ctx.serializar('periodo', { periodo: new Date(Date.UTC(2026, 3, 1)) }), '2026-04', 'N6: serializar Date -> YYYY-MM');
+  igual(ctx.serializar('periodo', { periodo: new Date(Date.UTC(2026, 3, 1, 4)) }), '2026-04', 'N6: serializar Date -> YYYY-MM');
   igual(ctx.serializar('periodo', { periodo: '2026-04-05' }), '2026-04', 'N7: serializar con dia');
 
   // Round-trip: celda de hoja con Date -> leerHoja devuelve periodo YYYY-MM
   const colsP = ctx.HOJAS.pagos;
   const filaP = { id: 'pg-z1', inquilinoId: null, servicioId: 'svc-luz', periodo: '2026-04', fechaPago: '2026-04-10', montoBs: 100, cantidad: null, unidadMedida: null, observacion: '' };
-  const filaCelda = colsP.map((c) => (c === 'periodo' ? new Date(Date.UTC(2026, 3, 1)) : ctx.serializar(c, filaP)));
+  const filaCelda = colsP.map((c) => (c === 'periodo' ? new Date(Date.UTC(2026, 3, 1, 4)) : ctx.serializar(c, filaP)));
   datos.pagos = [colsP.slice(), filaCelda];
   const leidosP = ctx.leerHoja('pagos');
   igual(leidosP.length, 1, 'N8: lee fila factura');
@@ -400,7 +444,8 @@ function main() {
   igual(leidosP[0].montoBs, 100, 'N11: monto');
   igual(leidosP[0].fechaPago, '2026-04-10', 'N12: fechaPago');
 
-  // Edicion de factura
+  // Edicion de factura (pg-z1 ocuparia el mismo servicio/mes)
+  ctx.borrar('pagos', 'pg-z1');
   ctx.upsert('pagos', { id: 'pg-edit', inquilinoId: null, servicioId: 'svc-luz', periodo: '2026-04', fechaPago: '2026-04-01', montoBs: 100, cantidad: null, unidadMedida: null, observacion: '' });
   const editado = ctx.registrarPago({ id: 'pg-edit', inquilinoId: null, servicioId: 'svc-luz', periodo: '2026-04', fechaPago: '2026-04-15', montoBs: 150, cantidad: null, unidadMedida: null, observacion: 'corregido' });
   igual(editado.id, 'pg-edit', 'E1: conserva id al editar');
@@ -440,7 +485,7 @@ function main() {
 
   // Ajuste manual del factor de reparto (peso)
   let rPeso = bodyDe(ctx.doPost({
-    parameter: { action: 'cobros.editarPeso', periodo: '2026-08', servicioId: 'svc-luz' },
+    parameter: { key: CLAVE, action: 'cobros.editarPeso', periodo: '2026-08', servicioId: 'svc-luz' },
     postData: { contents: JSON.stringify({ pesos: { 'inq-a': 1, 'inq-b': 1 } }) },
   }));
   igual(rPeso.ok, true, 'P1: reajuste devuelve ok');
@@ -454,14 +499,162 @@ function main() {
   // Con un abono del mes el servicio queda bloqueado
   ctx.upsert('pagos', { id: 'pg-abono', inquilinoId: 'inq-a', servicioId: 'svc-luz', periodo: '2026-08', fechaPago: '2026-08-20', montoBs: 50, cantidad: null, unidadMedida: null, observacion: '' });
   let rBloqueo = bodyDe(ctx.doPost({
-    parameter: { action: 'cobros.editarPeso', periodo: '2026-08', servicioId: 'svc-luz' },
+    parameter: { key: CLAVE, action: 'cobros.editarPeso', periodo: '2026-08', servicioId: 'svc-luz' },
     postData: { contents: JSON.stringify({ pesos: { 'inq-a': 2, 'inq-b': 1 } }) },
   }));
   igual(rBloqueo.ok, false, 'P6: bloqueado con abono');
-  igual(rBloqueo.error.indexOf('ya tiene pagos') >= 0, true, 'P7: error indica pago existente');
+  igual(rBloqueo.error.indexOf('ya pago este servicio') >= 0, true, 'P7: error indica pago existente');
   const luzPost = ctx.leerHoja('cobros').find((c) => c.servicioId === 'svc-luz' && c.inquilinoId === 'inq-a');
   igual(luzPost.montoTotal, 50, 'P8: sin cambios al estar bloqueado');
   ctx.borrar('pagos', 'pg-abono');
+
+  // ================= Correcciones (auditoria) =================
+  const post = (action, params, body) => bodyDe(ctx.doPost({
+    parameter: Object.assign({ key: CLAVE, action }, params || {}),
+    postData: body === undefined ? undefined : { contents: JSON.stringify(body) },
+  }));
+
+  // S: clave de acceso
+  r = bodyDe(ctx.doGet({ parameter: { action: 'snapshot' } }));
+  igual(r.ok === false && r.error.indexOf('NO_AUTORIZADO') >= 0, true, 'S1: sin clave rechazado');
+  r = bodyDe(ctx.doGet({ parameter: { action: 'snapshot', key: 'mala' } }));
+  igual(r.ok === false && r.error.indexOf('NO_AUTORIZADO') >= 0, true, 'S2: clave incorrecta rechazada');
+  r = bodyDe(ctx.doPost({ parameter: {}, postData: { contents: JSON.stringify({ action: 'delete', sheet: 'pagos', id: 'pg-l' }) } }));
+  igual(r.ok, false, 'S3: API interna sin clave rechazada');
+  r = bodyDe(ctx.doPost({ parameter: {}, postData: { contents: JSON.stringify({ key: CLAVE, action: 'upsert', sheet: 'inquilinos', row: { id: 'x-2', nombre: 'Clave en cuerpo' } }) } }));
+  igual(r.ok, true, 'S4: API interna con clave en el cuerpo');
+  ctx.borrar('inquilinos', 'x-2');
+  delete propiedades.API_KEY;
+  r = bodyDe(ctx.doGet({ parameter: { action: 'snapshot', key: CLAVE } }));
+  igual(r.ok === false && r.error.indexOf('NO_CONFIGURADA') >= 0, true, 'S5: sin clave configurada se rechaza todo');
+  propiedades.API_KEY = CLAVE;
+  const nueva = ctx.generarClave();
+  igual(propiedades.API_KEY === nueva && nueva.length >= 32, true, 'S6: generarClave guarda la clave');
+  propiedades.API_KEY = CLAVE;
+
+  // W: escritura por fila conserva columnas manuales
+  const cabInq = datos.inquilinos[0];
+  cabInq.push('notas');
+  const filaAna = datos.inquilinos.findIndex((f) => f[0] === 'inq-a');
+  datos.inquilinos[filaAna][cabInq.length - 1] = 'llave extra';
+  const totalFilas = datos.inquilinos.length;
+  ctx.upsert('inquilinos', Object.assign({}, ctx.leerHoja('inquilinos').find((x) => x.id === 'inq-a'), { celular: '777' }));
+  igual(datos.inquilinos[filaAna][cabInq.length - 1], 'llave extra', 'W1: columna manual conservada');
+  igual(datos.inquilinos.length, totalFilas, 'W2: actualiza en su lugar');
+  igual(ctx.leerHoja('inquilinos').find((x) => x.id === 'inq-a').celular, '777', 'W3: dato actualizado');
+  igual(ctx.serializar('nombre', { nombre: '=HYPERLINK("x")' }), '\'=HYPERLINK("x")', 'W4: texto con = no se vuelve formula');
+
+  // B: eliminar con historial bloqueado
+  r = post('inquilinos.eliminar', { id: 'inq-a' });
+  igual(r.ok === false && r.error.indexOf('Deshabilitalo') >= 0, true, 'B1: inquilino con cobros no se elimina');
+  r = post('servicios.eliminar', { id: 'svc-luz' });
+  igual(r.ok, false, 'B2: servicio con cobros no se elimina');
+  r = post('inquilinos.crear', null, { nombre: 'Sin historial', habilitado: true, habitaciones: 1, personas: 1 });
+  const idSin = r.data.id;
+  post('asignaciones.guardar', null, { periodo: '2026-08', inquilinoId: idSin, servicioId: 'svc-luz', activo: true, extras: {} });
+  r = post('inquilinos.eliminar', { id: idSin });
+  igual(r.ok, true, 'B3: inquilino sin historial se elimina');
+  igual(ctx.leerHoja('asignaciones').some((a) => a.inquilinoId === idSin), false, 'B4: sus asignaciones se borran');
+
+  // R: editar factura reajusta cobros con los mismos pesos (luz: pesos 1/1)
+  r = post('pagos.crear', null, { id: 'pg-l', inquilinoId: null, servicioId: 'svc-luz', periodo: '2026-08', fechaPago: '2026-08-05', montoBs: 200 });
+  igual(r.ok, true, 'R1: factura editada');
+  let luz = ctx.leerHoja('cobros').filter((c) => c.servicioId === 'svc-luz' && c.periodo === '2026-08');
+  igual(luz.map((c) => c.montoTotal).sort(), [100, 100], 'R2: cobros reajustados al nuevo monto');
+  igual(luz.map((c) => c.peso), [1, 1], 'R3: pesos conservados');
+  // Editar una factura hacia un servicio/mes que ya tiene factura -> rechazado
+  r = post('pagos.crear', null, { id: 'pg-l', inquilinoId: null, servicioId: 'svc-agua', periodo: '2026-08', fechaPago: '2026-08-05', montoBs: 200 });
+  igual(r.ok === false && r.error.indexOf('Ya existe una factura') >= 0, true, 'R4: duplicado al editar rechazado');
+  r = post('pagos.crear', null, { inquilinoId: 'inq-nadie', servicioId: 'svc-luz', periodo: '2026-08', montoBs: 10 });
+  igual(r.ok, false, 'R5: pago de inquilino inexistente rechazado');
+  r = post('pagos.crear', null, { inquilinoId: 'inq-a', servicioId: null, periodo: '2026-13', montoBs: 10 });
+  igual(r.ok, false, 'R6: periodo invalido rechazado');
+
+  // P: pago de OTRO servicio no bloquea el reajuste de pesos
+  ctx.upsert('pagos', { id: 'pg-agua-b', inquilinoId: 'inq-b', servicioId: 'svc-agua', periodo: '2026-08', fechaPago: '2026-08-21', montoBs: 10 });
+  r = post('cobros.editarPeso', { periodo: '2026-08', servicioId: 'svc-luz' }, { pesos: { 'inq-a': 1, 'inq-b': 3 } });
+  igual(r.ok, true, 'P9: pago de otro servicio no bloquea');
+  luz = ctx.leerHoja('cobros').filter((c) => c.servicioId === 'svc-luz' && c.periodo === '2026-08');
+  igual(luz.reduce((a, c) => a + c.montoTotal, 0), 200, 'P10: suma igual a la factura');
+
+  // X: eliminar factura
+  ctx.upsert('pagos', { id: 'pg-ab-luz', inquilinoId: 'inq-a', servicioId: 'svc-luz', periodo: '2026-08', fechaPago: '2026-08-22', montoBs: 5 });
+  r = post('pagos.eliminar', { id: 'pg-l' });
+  igual(r.ok === false && r.error.indexOf('Corrige el monto') >= 0, true, 'X1: factura con abonos no se elimina');
+  r = post('pagos.crear', null, { id: 'pg-l', inquilinoId: null, servicioId: 'svc-luz', periodo: '2026-08', fechaPago: '2026-08-05', montoBs: 0 });
+  igual(r.ok === false && r.error.indexOf('dejar la factura en 0') >= 0, true, 'X1b: no se deja en 0 con abonos');
+  r = post('pagos.crear', null, { id: 'pg-l', inquilinoId: null, servicioId: 'svc-luz', periodo: '2026-10', fechaPago: '2026-08-05', montoBs: 200 });
+  igual(r.ok === false && r.error.indexOf('mover la factura') >= 0, true, 'X1c: no se mueve con abonos');
+  igual(ctx.leerHoja('cobros').filter((c) => c.servicioId === 'svc-luz' && c.periodo === '2026-08').length, 2, 'X1d: cobros intactos');
+  ctx.borrar('pagos', 'pg-ab-luz');
+  r = post('pagos.eliminar', { id: 'pg-l' });
+  igual(r.ok, true, 'X2: factura sin abonos se elimina');
+  igual(ctx.leerHoja('cobros').some((c) => c.servicioId === 'svc-luz' && c.periodo === '2026-08'), false, 'X3: sus cobros se quitan');
+  igual(ctx.leerHoja('cobros').some((c) => c.servicioId === 'svc-agua'), true, 'X4: otros cobros intactos');
+  ctx.borrar('pagos', 'pg-agua-b');
+
+  // Generar un mes no toca los cobros de otros meses
+  const otroMes = { id: '2026-07-inq-a-svc-agua', periodo: '2026-07', inquilinoId: 'inq-a', servicioId: 'svc-agua', peso: 1, pesoTotal: 1, montoBase: 9, montoExtra: 0, montoTotal: 9, habitaciones: 1, personas: 1, extras: {} };
+  ctx.reemplazarFilas('cobros', () => false, [otroMes]);
+  ctx.generarCobrosServicio('2026-08', 'svc-agua');
+  ctx.generarCobros('2026-08');
+  igual(ctx.leerHoja('cobros').filter((c) => c.periodo === '2026-07').length, 1, 'M1: julio intacto y sin duplicar');
+
+  // Q: quitar filas no contiguas conserva el resto (incluida su columna manual)
+  ponerHoja('servicios_inquilinos', [
+    { id: 'q1', inquilinoId: 'i1', servicioId: 's', activo: true, extras: {} },
+    { id: 'q2', inquilinoId: 'i2', servicioId: 's', activo: true, extras: {} },
+    { id: 'q3', inquilinoId: 'i1', servicioId: 's', activo: true, extras: {} },
+    { id: 'q4', inquilinoId: 'i3', servicioId: 's', activo: true, extras: {} },
+  ]);
+  datos.servicios_inquilinos[0].push('nota');
+  datos.servicios_inquilinos[4][ctx.HOJAS.servicios_inquilinos.length] = 'conservar';
+  ctx.quitarFilas('servicios_inquilinos', (x) => x.inquilinoId === 'i1');
+  igual(ctx.leerHoja('servicios_inquilinos').map((x) => x.id), ['q2', 'q4'], 'Q1: quita q1 y q3');
+  igual(datos.servicios_inquilinos[2][ctx.HOJAS.servicios_inquilinos.length], 'conservar', 'Q2: columna manual de q4 intacta');
+
+  // K: version de datos, cache de sync y respuesta conSync
+  const v0 = bodyDe(ctx.doGet({ parameter: { key: CLAVE, action: 'version' } })).data.version;
+  r = bodyDe(ctx.doGet({ parameter: { key: CLAVE, action: 'sync' } }));
+  igual(r.ok && r.data.snapshot.version === v0, true, 'K1: sync con la version actual');
+  igual(Object.keys(cacheMem).some((k) => k === 'sync_' + v0 + '_n'), true, 'K2: sync guardado en cache');
+  // Si la hoja cambia sin subir version, se sigue sirviendo la cache (prueba que se usa)
+  const nInq = r.data.snapshot.inquilinos.length;
+  datos.inquilinos.push(['inq-fantasma', 'Fantasma']);
+  igual(bodyDe(ctx.doGet({ parameter: { key: CLAVE, action: 'sync' } })).data.snapshot.inquilinos.length, nInq, 'K3: respuesta desde cache');
+  ctx.onEdit();
+  const v1 = bodyDe(ctx.doGet({ parameter: { key: CLAVE, action: 'version' } })).data.version;
+  igual(v1 !== v0, true, 'K4: onEdit cambia la version');
+  igual(bodyDe(ctx.doGet({ parameter: { key: CLAVE, action: 'sync' } })).data.snapshot.inquilinos.length, nInq + 1, 'K5: tras editar se recalcula');
+  ctx.borrar('inquilinos', 'inq-fantasma');
+  await new Promise((res) => setTimeout(res, 3));
+  r = post('inquilinos.crear', { conSync: '1' }, { nombre: 'Con Sync', habilitado: true, habitaciones: 1, personas: 1 });
+  igual(r.ok, true, 'K6: crear con conSync');
+  igual(r.sync.snapshot.inquilinos.some((i) => i.id === r.data.id), true, 'K7: la respuesta trae el snapshot actualizado');
+  igual(r.sync.snapshot.version !== v1, true, 'K8: version nueva tras escribir');
+  ctx.borrar('inquilinos', r.data.id);
+  r = post('inquilinos.crear', null, { nombre: 'Sin Sync', habilitado: true, habitaciones: 1, personas: 1 });
+  igual(r.sync, undefined, 'K9: sin conSync no se envia snapshot');
+  ctx.borrar('inquilinos', r.data.id);
+
+  // CA: copiar asignaciones de un mes a otro
+  ponerHoja('inquilinos', [inq('inq-a', 'Ana', true, 1, 1), inq('inq-b', 'Beto', true, 1, 1, '2024-01-01', '2026-08-31')]);
+  ponerHoja('servicios', [svc('svc-luz', 'Luz', 'CUARTOS')]);
+  ponerHoja('asignaciones', [asig('2026-08', 'inq-a', 'svc-luz', true, { Refrigerador: 1 }), asig('2026-08', 'inq-b', 'svc-luz', true)]);
+  r = post('asignaciones.copiar', { origen: '2026-08', destino: '2026-09' });
+  igual(r.ok && r.data.copiadas, 1, 'CA1: copia solo inquilinos activos en el destino');
+  const copia = ctx.leerHoja('asignaciones').find((a) => a.periodo === '2026-09');
+  igual(copia.extras.Refrigerador, 1, 'CA2: conserva extras');
+  r = post('asignaciones.copiar', { origen: '2026-08', destino: '2026-09' });
+  igual(r.data.copiadas, 0, 'CA3: no duplica');
+
+  // A: activoEn respeta la fecha de ingreso; red2
+  const futuro = inq('inq-f', 'Futuro', true, 1, 1, '2026-09-10');
+  igual(ctx.activoEn(futuro, ctx.parsePeriodo('2026-08')), false, 'A1: aun no ingreso');
+  igual(ctx.activoEn(futuro, ctx.parsePeriodo('2026-09')), true, 'A2: ingresa en el mes');
+  igual(ctx.red2(1.005), 1.01, 'A3: red2 HALF_UP sin error binario');
+  igual(ctx.red2(-0.004), 0, 'A4: sin -0');
+  igual(ctx.hoyISO().length, 10, 'A5: hoyISO');
 
   // Limpieza
   ctx.borrar('servicios', 'svc-luz');
@@ -476,4 +669,4 @@ function main() {
   console.log(`OK: ${pasadas} verificaciones pasaron`);
 }
 
-main();
+main().catch((e) => { console.error(e); process.exit(1); });
