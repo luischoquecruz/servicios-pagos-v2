@@ -2,11 +2,12 @@
 backend/target/
 backend/data/
 backend/*.log
+backend/secrets.properties
 
 # frontend
 frontend/node_modules/
 frontend/dist/
-frontend/nppBackup/
+nppBackup/
 
 # vercel
 .vercel/
